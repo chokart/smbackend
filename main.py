@@ -4,6 +4,8 @@ from models import ReconciliationRequest, ReconciliationResponse
 from reconciliation import reconcile_data_qp, _get_balance_system, format_equations_to_strings
 from water_models import WaterReconciliationRequest, WaterReconciliationResponse
 from water_reconciliation import reconcile_water_data, _get_water_balance_system, format_water_equations
+from hydrocyclone_models import RaoLynchRequest, RaoLynchResponse
+from hydrocyclone_logic import calculate_rao_lynch
 
 app = FastAPI()
 
@@ -54,6 +56,13 @@ def preview_water_equations(request: WaterReconciliationRequest):
         return {"equations": equations}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar ecuaciones de agua: {e}")
+
+@app.post("/model/hydrocyclone/rao-lynch", response_model=RaoLynchResponse)
+def hydrocyclone_rao_lynch(request: RaoLynchRequest):
+    try:
+        return calculate_rao_lynch(request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en el cálculo del hidrociclón: {e}")
 
 @app.get("/")
 def read_root():
