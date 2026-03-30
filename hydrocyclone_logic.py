@@ -1,149 +1,165 @@
 import numpy as np
+from scipy.optimize import minimize
 from typing import List, Tuple
 from hydrocyclone_models import (
-    RaoLynchRequest, RaoLynchResponse, PartitionCurvePoint, 
-    GranulometryPoint, BalanceRow
+    HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse, 
+    PartitionCurvePoint, GranulometryPoint, BalanceRow, WaterBalance
 )
 
-def calculate_rao_lynch(request: RaoLynchRequest) -> RaoLynchResponse:
-    # 1. Procesar granulometría experimental
-    sizes = [s.mesh_size for s in request.sieves]
-    w_f = np.array([s.weight_feed for s in request.sieves])
-    w_o = np.array([s.weight_overflow for s in request.sieves])
-    w_u = np.array([s.weight_underflow for s in request.sieves])
+def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAnalysisResponse:
+    # 1. Preparación de Datos Experimentales
+    sizes = np.array([s.mesh_size for s in request.sieves])
+    # Ordenar por tamaño descendente para coherencia
+    sort_idx = np.argsort(sizes)[::-1]
+    sizes = sizes[sort_idx]
     
-    # Agregar pesos del FONDO (PAN)
-    w_f_all = np.append(w_f, request.pan_feed)
-    w_o_all = np.append(w_o, request.pan_overflow)
-    w_u_all = np.append(w_u, request.pan_underflow)
+    w_f = np.array([request.sieves[i].weight_feed for i in sort_idx])
+    w_o = np.array([request.sieves[i].weight_overflow for i in sort_idx])
+    w_u = np.array([request.sieves[i].weight_underflow for i in sort_idx])
     
-    # Totales y Porcentajes Retenidos Parciales
-    tot_f = np.sum(w_f_all)
-    tot_o = np.sum(w_o_all)
-    tot_u = np.sum(w_u_all)
+    # Incluir fondo (Pan) al final
+    f_raw = np.append(w_f, request.pan_feed)
+    o_raw = np.append(w_o, request.pan_overflow)
+    u_raw = np.append(w_u, request.pan_underflow)
     
-    pr_f_all = (w_f_all / tot_f) * 100 if tot_f > 0 else np.zeros_like(w_f_all)
-    pr_o_all = (w_o_all / tot_o) * 100 if tot_o > 0 else np.zeros_like(w_o_all)
-    pr_u_all = (w_u_all / tot_u) * 100 if tot_u > 0 else np.zeros_like(w_u_all)
-    
-    # 2. Balance de masa y Recuperación de sólidos (S)
-    S_vals = []
-    for f, o, u in zip(pr_f_all, pr_o_all, pr_u_all):
-        if abs(u - o) > 0.1:
-            S_est = (f - o) / (u - o)
-            if 0 < S_est < 1: S_vals.append(S_est)
-    S_solids = np.mean(S_vals) if S_vals else (tot_u / tot_f if tot_f > 0 else 0.5)
-    
-    # 3. Curva de Partición (Ea, Ec)
-    E_a_all = []
-    for f, u in zip(pr_f_all, pr_u_all):
-        if f > 0:
-            E_a_all.append(np.clip(S_solids * (u / f), 0, 1))
-        else:
-            E_a_all.append(0)
-            
-    Rf = float(E_a_all[-1]) # Bypass basado en el fondo
-    E_a_sieves = np.array(E_a_all[:-1])
-    E_c_sieves = (E_a_sieves - Rf) / (1 - Rf) if Rf < 1 else np.zeros_like(E_a_sieves)
-    E_c_sieves = np.clip(E_c_sieves, 0, 1)
-    
-    # d50c Experimental (Interpolación Logarítmica)
-    log_sizes = np.log10(sizes)
-    try:
-        if np.max(E_c_sieves) >= 0.5 >= np.min(E_c_sieves):
-            log_d50c = np.interp(0.5, E_c_sieves[::-1], log_sizes[::-1])
-            d50c_exp = 10**log_d50c
-        else:
-            d50c_exp = 0.0
-    except:
-        d50c_exp = 0.0
+    tot_f, tot_o, tot_u = np.sum(f_raw), np.sum(o_raw), np.sum(u_raw)
+    if tot_f <= 0: return _empty_response()
+
+    # Porcentajes parciales experimentales
+    p_f_exp = (f_raw / tot_f) * 100
+    p_o_exp = (o_raw / tot_o) * 100
+    p_u_exp = (u_raw / tot_u) * 100
+
+    # 2. Optimización de la Recuperación de Sólidos (S)
+    # Buscamos S que minimice el error en: f_i = (1-S)*o_i + S*u_i
+    def obj_s(S):
+        error = 0
+        for f, o, u in zip(p_f_exp, p_o_exp, p_u_exp):
+            balance_calc = (1 - S) * o + S * u
+            error += (f - balance_calc)**2
+        return error
+
+    res_s = minimize(obj_s, 0.5, bounds=[(0.01, 0.99)])
+    S_opt = res_s.x[0]
+
+    # 3. Reconciliación de Porcentajes por Malla
+    # Para cada malla, ajustamos f_i, o_i, u_i para que el balance sea exacto
+    # min sum((f_i-f_exp)^2 + (o_i-o_exp)^2 + (u_i-u_exp)^2) s.t. f_i = (1-S)*o_i + S*u_i
+    p_f_adj, p_o_adj, p_u_adj = [], [], []
+    for f_e, o_e, u_e in zip(p_f_exp, p_o_exp, p_u_exp):
+        def obj_mesh(x):
+            f, o, u = x
+            return (f - f_e)**2 + (o - o_e)**2 + (u - u_e)**2
         
-    # 4. Distribución Granulométrica (Pasante Acumulado)
-    # Calculamos acumulados pasantes
-    f_cum_pass = 100 - np.cumsum(pr_f_all)
-    o_cum_pass = 100 - np.cumsum(pr_o_all)
-    u_cum_pass = 100 - np.cumsum(pr_u_all)
+        cons = {'type': 'eq', 'fun': lambda x: x[0] - ((1 - S_opt) * x[1] + S_opt * x[2])}
+        res_m = minimize(obj_mesh, [f_e, o_e, u_e], constraints=cons, bounds=[(0, 100), (0, 100), (0, 100)])
+        p_f_adj.append(res_m.x[0]), p_o_adj.append(res_m.x[1]), p_u_adj.append(res_m.x[2])
+
+    p_f_adj, p_o_adj, p_u_adj = np.array(p_f_adj), np.array(p_o_adj), np.array(p_u_adj)
     
-    granulometry_points = []
-    for i in range(len(sizes)):
-        granulometry_points.append(GranulometryPoint(
-            size=sizes[i],
-            feed_passing=float(f_cum_pass[i]),
-            overflow_passing=float(o_cum_pass[i]),
-            underflow_passing=float(u_cum_pass[i])
-        ))
-        
-    # 5. Tabla de Balance
-    balance_rows = []
-    for i in range(len(sizes)):
-        balance_rows.append(BalanceRow(
-            size=f"{sizes[i]} µm",
-            feed_pct=float(pr_f_all[i]),
-            overflow_pct=float(pr_o_all[i]),
-            underflow_pct=float(pr_u_all[i]),
-            recovery_underflow=float(E_a_all[i])
-        ))
-    # Agregar fila de fondo
-    balance_rows.append(BalanceRow(
-        size="Fondo (Pan)",
-        feed_pct=float(pr_f_all[-1]),
-        overflow_pct=float(pr_o_all[-1]),
-        underflow_pct=float(pr_u_all[-1]),
-        recovery_underflow=float(E_a_all[-1])
-    ))
+    # Normalizar para que sumen 100% (pequeños ajustes residuales)
+    p_f_adj = (p_f_adj / np.sum(p_f_adj)) * 100
+    p_o_adj = (p_o_adj / np.sum(p_o_adj)) * 100
+    p_u_adj = (p_u_adj / np.sum(p_u_adj)) * 100
+
+    # 4. Cálculo de Eficiencias y Curvas
+    # Ea = S * (u_i / f_i)
+    E_a_adj_all = np.clip(S_opt * p_u_adj / p_f_adj, 0, 1)
     
-    # 6. CALIBRACIÓN Y PREDICCIÓN (RAO & LYNCH)
-    # Factores geométricos fijos
-    geom_factor_Q = (request.geometry.Do**0.73) * (request.geometry.Di**0.53) * (request.pressure**0.42)
-    rho_s = request.solid_density
-    rho_l = 1.0
-    Cv = (request.feed_p_solids / rho_s) / (request.feed_p_solids / rho_s + (100 - request.feed_p_solids) / rho_l) * 100
+    # Bypass (Rf) -> Usamos la eficiencia de la fracción más fina (fondo)
+    Rf = float(E_a_adj_all[-1])
     
-    geom_factor_d50c = (request.geometry.Do**0.52) * (request.geometry.Di**-0.5) * (request.geometry.Du**-0.2) * (request.pressure**-0.3) * np.exp(Cv * 0.063)
-    
-    # Calibración de K1 (si hay caudal experimental)
-    if request.exp_capacity_Q:
-        k1_calc = request.exp_capacity_Q / geom_factor_Q
-    else:
-        k1_calc = 13.5 # Estándar
-        
-    # Calibración de K3 (si hay d50c experimental)
-    if d50c_exp > 0:
-        k3_calc = d50c_exp / geom_factor_d50c
-    else:
-        k3_calc = 35.0 # Estándar
-        
-    # Predicción (usando las constantes calibradas o las enviadas manualmente)
-    k1_to_use = request.k1 or k1_calc
-    k3_to_use = request.k3 or k3_calc
-    
-    Q_pred = k1_to_use * geom_factor_Q
-    d50c_pred = k3_to_use * geom_factor_d50c
-    
-    # 7. Preparar Respuesta
-    partition_points = []
-    for i in range(len(sizes)):
-        partition_points.append(PartitionCurvePoint(
-            size=sizes[i],
-            actual_recovery=float(E_a_all[i]),
-            corrected_recovery=float(E_c_sieves[i])
-        ))
-        
-    return RaoLynchResponse(
-        d50c_experimental=float(d50c_exp),
-        d50c_predicted=float(d50c_pred),
-        water_bypass_Rf=float(Rf * 100),
-        capacity_Q=float(Q_pred),
-        k1_calculated=float(k1_calc),
-        k3_calculated=float(k3_calc),
-        partition_curve=partition_points,
-        granulometry_curve=granulometry_points,
-        balance_table=balance_rows,
-        summary={
-            "S_solids_recovery": float(S_solids * 100),
-            "feed_total": float(tot_f),
-            "overflow_total": float(tot_o),
-            "underflow_total": float(tot_u),
-            "vol_concentration_Cv": float(Cv)
-        }
+    # Eficiencia Corregida (Ec)
+    E_c_adj_all = (E_a_adj_all - Rf) / (1 - Rf) if Rf < 1 else np.zeros_like(E_a_adj_all)
+    E_c_adj_all = np.clip(E_c_adj_all, 0, 1)
+
+    # d50c experimental vs ajustado
+    d50c_exp = _calculate_d50c(sizes, (S_opt * p_u_exp[:-1] / p_f_exp[:-1] - Rf)/(1-Rf))
+    d50c_adj = _calculate_d50c(sizes, E_c_adj_all[:-1])
+
+    # 5. Balance de Agua
+    Rw = None
+    if request.feed_p_solids and request.overflow_p_solids and request.underflow_p_solids:
+        # F = O + U (Sólidos)
+        # Fw = Ow + Uw (Agua) -> F(1-Cp)/Cp = O(1-Co)/Co + U(1-Cu)/Cu
+        cp, co, cu = request.feed_p_solids/100, request.overflow_p_solids/100, request.underflow_p_solids/100
+        # Rw = Uw / Fw
+        # Usando S = U/F -> U = S*F, O = (1-S)*F
+        # Rw = [S*F*(1-cu)/cu] / [F*(1-cp)/cp] = S * (1-cu)/cu * cp/(1-cp)
+        Rw = S_opt * ((1 - cu) / cu) * (cp / (1 - cp))
+        # Si Rw es inconsistente, podríamos usar Rf como estimador o viceversa
+
+    water_bal = WaterBalance(
+        solids_recovery_S=float(S_opt * 100),
+        water_recovery_Rw=float(Rw * 100) if Rw is not None else None,
+        bypass_Rf=float(Rf * 100),
+        feed_flow=100.0,
+        overflow_flow=float((1 - S_opt) * 100),
+        underflow_flow=float(S_opt * 100)
     )
+
+    # 6. Construcción de Respuesta
+    f_pass_exp, o_pass_exp, u_pass_exp = 100 - np.cumsum(p_f_exp[:-1]), 100 - np.cumsum(p_o_exp[:-1]), 100 - np.cumsum(p_u_exp[:-1])
+    f_pass_adj, o_pass_adj, u_pass_adj = 100 - np.cumsum(p_f_adj[:-1]), 100 - np.cumsum(p_o_adj[:-1]), 100 - np.cumsum(p_u_adj[:-1])
+
+    granulometry_pts = [
+        GranulometryPoint(
+            size=float(sizes[i]), 
+            feed_passing=float(f_pass_exp[i]), overflow_passing=float(o_pass_exp[i]), underflow_passing=float(u_pass_exp[i]),
+            feed_passing_adj=float(f_pass_adj[i]), overflow_passing_adj=float(o_pass_adj[i]), underflow_passing_adj=float(u_pass_adj[i])
+        ) for i in range(len(sizes))
+    ]
+
+    partition_pts = [
+        PartitionCurvePoint(
+            size=float(sizes[i]), 
+            actual_recovery=float(S_opt * p_u_exp[i] / p_f_exp[i]), 
+            corrected_recovery=float((S_opt * p_u_exp[i] / p_f_exp[i] - Rf)/(1-Rf)),
+            adjusted_recovery=float(E_a_adj_all[i])
+        ) for i in range(len(sizes))
+    ]
+
+    balance_table = []
+    for i in range(len(sizes)):
+        balance_table.append(BalanceRow(
+            size=f"{sizes[i]} µm",
+            feed_pct=float(p_f_exp[i]), overflow_pct=float(p_o_exp[i]), underflow_pct=float(p_u_exp[i]),
+            feed_pct_adj=float(p_f_adj[i]), overflow_pct_adj=float(p_o_adj[i]), underflow_pct_adj=float(p_u_adj[i]),
+            recovery_underflow=float(E_a_adj_all[i])
+        ))
+    balance_table.append(BalanceRow(
+        size="Fondo (Pan)",
+        feed_pct=float(p_f_exp[-1]), overflow_pct=float(p_o_exp[-1]), underflow_pct=float(p_u_exp[-1]),
+        feed_pct_adj=float(p_f_adj[-1]), overflow_pct_adj=float(p_o_adj[-1]), underflow_pct_adj=float(p_u_adj[-1]),
+        recovery_underflow=float(E_a_adj_all[-1])
+    ))
+
+    return HydrocycloneAnalysisResponse(
+        d50c_experimental=float(d50c_exp),
+        d50c_adjusted=float(d50c_adj),
+        water_balance=water_bal,
+        partition_curve=partition_pts,
+        granulometry_curve=granulometry_pts,
+        balance_table=balance_table,
+        summary={"iterations": 1, "status": "Success"}
+    )
+
+def _calculate_d50c(sizes, efficiencies):
+    """Interpolación logarítmica para encontrar el tamaño donde la eficiencia es 0.5."""
+    try:
+        log_sizes = np.log10(sizes)
+        # Asegurar que esté ordenado para interp
+        s_idx = np.argsort(efficiencies)
+        eff_s = efficiencies[s_idx]
+        log_s_s = log_sizes[s_idx]
+        
+        if np.max(eff_s) >= 0.5 >= np.min(eff_s):
+            log_d50c = np.interp(0.5, eff_s, log_s_s)
+            return 10**log_d50c
+        return 0.0
+    except:
+        return 0.0
+
+def _empty_response():
+    # Implementar según sea necesario para manejar errores
+    pass

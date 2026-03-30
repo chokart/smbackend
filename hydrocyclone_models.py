@@ -7,62 +7,72 @@ class SieveEntry(BaseModel):
     weight_overflow: float
     weight_underflow: float
 
-class HydrocycloneGeometry(BaseModel):
-    Dc: float
-    Di: float
-    Do: float
-    Du: float
-
-class RaoLynchRequest(BaseModel):
+class HydrocycloneAnalysisRequest(BaseModel):
     sieves: List[SieveEntry]
     pan_feed: float
     pan_overflow: float
     pan_underflow: float
-    geometry: HydrocycloneGeometry
-    pressure: float
-    solid_density: float
-    feed_p_solids: float
-    # Capacidad experimental medida (opcional, para calibrar K1)
-    exp_capacity_Q: Optional[float] = None
-    # Constantes manuales (si el usuario ya las conoce)
-    k1: Optional[float] = None
-    k3: Optional[float] = None
+    
+    # Datos de referencia
+    pressure: Optional[float] = None
+    solid_density: float = 2.65
+    # Porcentajes de sólidos (opcionales pero recomendados para balance de agua)
+    feed_p_solids: Optional[float] = None
+    overflow_p_solids: Optional[float] = None
+    underflow_p_solids: Optional[float] = None
 
 class PartitionCurvePoint(BaseModel):
     size: float
     actual_recovery: float
     corrected_recovery: float
+    adjusted_recovery: Optional[float] = None # Usando datos reconciliados
 
 class GranulometryPoint(BaseModel):
     size: float
     feed_passing: float
     overflow_passing: float
     underflow_passing: float
+    # Versiones ajustadas
+    feed_passing_adj: Optional[float] = None
+    overflow_passing_adj: Optional[float] = None
+    underflow_passing_adj: Optional[float] = None
 
 class BalanceRow(BaseModel):
     size: str
+    # Datos experimentales (parciales %)
     feed_pct: float
     overflow_pct: float
     underflow_pct: float
-    recovery_underflow: float
+    # Datos ajustados (parciales %)
+    feed_pct_adj: Optional[float] = None
+    overflow_pct_adj: Optional[float] = None
+    underflow_pct_adj: Optional[float] = None
+    
+    recovery_underflow: float # Eficiencia Ea
 
-class RaoLynchResponse(BaseModel):
-    # Resultados clave
+class WaterBalance(BaseModel):
+    solids_recovery_S: float
+    water_recovery_Rw: Optional[float] = None
+    bypass_Rf: float
+    # Flujos calculados (basados en 100 unidades de alimento o pesos totales)
+    feed_flow: float
+    overflow_flow: float
+    underflow_flow: float
+
+class HydrocycloneAnalysisResponse(BaseModel):
+    # Resultados (Ajustados si es posible)
     d50c_experimental: float
-    d50c_predicted: float
-    water_bypass_Rf: float
-    capacity_Q: float
+    d50c_adjusted: Optional[float] = None
     
-    # Constantes de Calibración calculadas
-    k1_calculated: float
-    k3_calculated: float
+    # Balance de Masa y Agua
+    water_balance: WaterBalance
     
-    # Datos para gráficos
+    # Gráficos
     partition_curve: List[PartitionCurvePoint]
     granulometry_curve: List[GranulometryPoint]
     
     # Tabla de balance
     balance_table: List[BalanceRow]
     
-    # Totales
+    # Resumen y mensajes
     summary: dict
