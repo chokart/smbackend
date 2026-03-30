@@ -1,10 +1,29 @@
 import numpy as np
 from scipy.optimize import minimize
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from hydrocyclone_models import (
     HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse, 
-    PartitionCurvePoint, GranulometryPoint, BalanceRow, WaterBalance
+    PartitionCurvePoint, GranulometryPoint, BalanceRow, WaterBalance,
+    TrompParameters, GlobalBalance, FlowData
 )
+
+def _interpolate_size(sizes, efficiencies, target_eff):
+    """Interpola un tamaño para una eficiencia dada en escala logarítmica."""
+    try:
+        log_sizes = np.log10(sizes)
+        # Asegurar que esté ordenado para interp
+        s_idx = np.argsort(efficiencies)
+        eff_s = efficiencies[s_idx]
+        log_s_s = log_sizes[s_idx]
+        
+        if np.max(eff_s) >= target_eff >= np.min(eff_s):
+            return 10**np.interp(target_eff, eff_s, log_s_s)
+        return 0.0
+    except:
+        return 0.0
+
+def _calculate_d50c(sizes, efficiencies):
+    return _interpolate_size(sizes, efficiencies, 0.5)
 
 def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAnalysisResponse:
     # 1. Preparación de Datos Experimentales
@@ -31,7 +50,6 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     p_u_exp = (u_raw / tot_u) * 100
 
     # 2. Optimización de la Recuperación de Sólidos (S)
-    # Buscamos S que minimice el error en: f_i = (1-S)*o_i + S*u_i
     def obj_s(S):
         error = 0
         for f, o, u in zip(p_f_exp, p_o_exp, p_u_exp):
@@ -43,8 +61,6 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     S_opt = res_s.x[0]
 
     # 3. Reconciliación de Porcentajes por Malla
-    # Para cada malla, ajustamos f_i, o_i, u_i para que el balance sea exacto
-    # min sum((f_i-f_exp)^2 + (o_i-o_exp)^2 + (u_i-u_exp)^2) s.t. f_i = (1-S)*o_i + S*u_i
     p_f_adj, p_o_adj, p_u_adj = [], [], []
     for f_e, o_e, u_e in zip(p_f_exp, p_o_exp, p_u_exp):
         def obj_mesh(x):
@@ -56,30 +72,30 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         p_f_adj.append(res_m.x[0]), p_o_adj.append(res_m.x[1]), p_u_adj.append(res_m.x[2])
 
     p_f_adj, p_o_adj, p_u_adj = np.array(p_f_adj), np.array(p_o_adj), np.array(p_u_adj)
-    
-    # Normalizar para que sumen 100% (pequeños ajustes residuales)
     p_f_adj = (p_f_adj / np.sum(p_f_adj)) * 100
     p_o_adj = (p_o_adj / np.sum(p_o_adj)) * 100
     p_u_adj = (p_u_adj / np.sum(p_u_adj)) * 100
 
     # 4. Cálculo de Eficiencias y Curvas
-    # Ea = S * (u_i / f_i)
     E_a_adj_all = np.clip(S_opt * p_u_adj / p_f_adj, 0, 1)
-    
-    # Bypass (Rf) -> Usamos la eficiencia de la fracción más fina (fondo)
     Rf = float(E_a_adj_all[-1])
-    
-    # Eficiencia Corregida (Ec)
     E_c_adj_all = (E_a_adj_all - Rf) / (1 - Rf) if Rf < 1 else np.zeros_like(E_a_adj_all)
     E_c_adj_all = np.clip(E_c_adj_all, 0, 1)
 
-    # d50c experimental vs ajustado
     d50c_exp = _calculate_d50c(sizes, (S_opt * p_u_exp[:-1] / p_f_exp[:-1] - Rf)/(1-Rf))
     d50c_adj = _calculate_d50c(sizes, E_c_adj_all[:-1])
+    
+    # 4.1 Parámetros de Tromp
+    d25c = _interpolate_size(sizes, E_c_adj_all[:-1], 0.25)
+    d75c = _interpolate_size(sizes, E_c_adj_all[:-1], 0.75)
+    tromp = TrompParameters(
+        d25c=float(d25c), d50c=float(d50c_adj), d75c=float(d75c),
+        imperfection=float((d75c - d25c) / (2 * d50c_adj)) if d50c_adj > 0 else 0
+    )
 
     # 5. Balance de Agua y Diagnóstico
     Rw = None
-    E_pan = float(E_a_adj_all[-1]) # Recuperación ajustada del fondo
+    E_pan = float(E_a_adj_all[-1])
     consistency_err = None
     diag_msg = "Datos procesados correctamente."
     diag_level = "success"
@@ -87,18 +103,48 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     if request.feed_p_solids and request.overflow_p_solids and request.underflow_p_solids:
         cp, co, cu = request.feed_p_solids/100, request.overflow_p_solids/100, request.underflow_p_solids/100
         Rw = S_opt * ((1 - cu) / cu) * (cp / (1 - cp))
-        
         consistency_err = abs(E_pan - Rw)
         
         if consistency_err < 0.02:
             diag_msg = "Excelente consistencia entre el fondo (pan) y el balance de agua."
             diag_level = "success"
         elif consistency_err < 0.05:
-            diag_msg = "Consistencia aceptable. Existe una pequeña desviación en los datos del fondo o % sólidos."
+            diag_msg = "Consistencia aceptable."
             diag_level = "warning"
         else:
-            diag_msg = "Atención: Discrepancia significativa (>5%) entre el fondo y el agua. Revise el pesaje del pan o los % de sólidos."
+            diag_msg = "Atención: Discrepancia significativa (>5%) entre el fondo y el agua."
             diag_level = "error"
+
+    # 5.1 Balance Global Absoluto
+    global_bal = None
+    if request.feed_flow_rate and request.feed_p_solids:
+        cp = request.feed_p_solids / 100
+        co = (request.overflow_p_solids or 0) / 100
+        cu = (request.underflow_p_solids or 0) / 100
+        
+        # Calcular masa de sólidos en alimento (tph)
+        if request.feed_flow_unit == "tph":
+            f_mass_s = request.feed_flow_rate
+        else: # m3h de pulpa
+            factor = (1 / request.solid_density) + ((1 - cp) / cp)
+            f_mass_s = request.feed_flow_rate / factor
+            
+        def get_flow_data(mass_s, p_sol):
+            p_sol = max(p_sol, 0.001)
+            mass_w = mass_s * (1 - p_sol) / p_sol
+            vol_s = mass_s / request.solid_density
+            vol_w = mass_w / 1.0
+            return FlowData(
+                mass_solids=float(mass_s), mass_water=float(mass_w),
+                vol_solids=float(vol_s), vol_water=float(vol_w),
+                vol_pulp=float(vol_s + vol_w), p_solids=float(p_sol * 100)
+            )
+
+        global_bal = GlobalBalance(
+            feed=get_flow_data(f_mass_s, cp),
+            overflow=get_flow_data(f_mass_s * (1 - S_opt), co or cp),
+            underflow=get_flow_data(f_mass_s * S_opt, cu or cp)
+        )
 
     water_bal = WaterBalance(
         solids_recovery_S=float(S_opt * 100),
@@ -108,7 +154,8 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         consistency_error=float(consistency_err * 100) if consistency_err is not None else None,
         feed_flow=100.0,
         overflow_flow=float((1 - S_opt) * 100),
-        underflow_flow=float(S_opt * 100)
+        underflow_flow=float(S_opt * 100),
+        global_balance=global_bal
     )
 
     # 6. Construcción de Respuesta
@@ -150,6 +197,7 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     return HydrocycloneAnalysisResponse(
         d50c_experimental=float(d50c_exp),
         d50c_adjusted=float(d50c_adj),
+        tromp=tromp,
         diagnosis_message=diag_msg,
         diagnosis_level=diag_level,
         water_balance=water_bal,
@@ -159,22 +207,10 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         summary={"iterations": 1, "status": "Success"}
     )
 
-def _calculate_d50c(sizes, efficiencies):
-    """Interpolación logarítmica para encontrar el tamaño donde la eficiencia es 0.5."""
-    try:
-        log_sizes = np.log10(sizes)
-        # Asegurar que esté ordenado para interp
-        s_idx = np.argsort(efficiencies)
-        eff_s = efficiencies[s_idx]
-        log_s_s = log_sizes[s_idx]
-        
-        if np.max(eff_s) >= 0.5 >= np.min(eff_s):
-            log_d50c = np.interp(0.5, eff_s, log_s_s)
-            return 10**log_d50c
-        return 0.0
-    except:
-        return 0.0
-
 def _empty_response():
-    # Implementar según sea necesario para manejar errores
-    pass
+    # Implementación básica para evitar errores
+    return HydrocycloneAnalysisResponse(
+        d50c_experimental=0, d50c_adjusted=0, 
+        water_balance=WaterBalance(solids_recovery_S=0, bypass_Rf=0, feed_flow=100, overflow_flow=0, underflow_flow=0),
+        partition_curve=[], granulometry_curve=[], balance_table=[], summary={}
+    )
