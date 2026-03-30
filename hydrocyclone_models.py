@@ -2,50 +2,67 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 class SieveEntry(BaseModel):
-    mesh_size: float  # Tamaño en micrones
+    mesh_size: float
     weight_feed: float
     weight_overflow: float
     weight_underflow: float
 
 class HydrocycloneGeometry(BaseModel):
-    Dc: float  # Diámetro ciclón (mm)
-    Di: float  # Diámetro entrada (mm)
-    Do: float  # Diámetro vortex (mm)
-    Du: float  # Diámetro apex (mm)
+    Dc: float
+    Di: float
+    Do: float
+    Du: float
 
 class RaoLynchRequest(BaseModel):
-    # Datos experimentales de mallas
     sieves: List[SieveEntry]
-    
-    # Datos del hidrociclón
+    pan_feed: float
+    pan_overflow: float
+    pan_underflow: float
     geometry: HydrocycloneGeometry
-    
-    # Parámetros de operación
-    pressure: float      # Presión (kPa)
-    solid_density: float # g/cm3 (default 2.65)
-    feed_p_solids: float # % sólidos en peso en el alimento
-    
-    # Parámetros de ajuste (K1, K2, K3, K4) 
-    # Si no se envían, usaremos los valores estándar de Rao & Lynch
+    pressure: float
+    solid_density: float
+    feed_p_solids: float
+    # Capacidad experimental medida (opcional, para calibrar K1)
+    exp_capacity_Q: Optional[float] = None
+    # Constantes manuales (si el usuario ya las conoce)
     k1: Optional[float] = None
-    k2: Optional[float] = None
     k3: Optional[float] = None
-    k4: Optional[float] = None
 
 class PartitionCurvePoint(BaseModel):
     size: float
-    actual_recovery: float    # Recuperación real
-    corrected_recovery: float # Recuperación corregida (E_c)
+    actual_recovery: float
+    corrected_recovery: float
+
+class GranulometryPoint(BaseModel):
+    size: float
+    feed_passing: float
+    overflow_passing: float
+    underflow_passing: float
+
+class BalanceRow(BaseModel):
+    size: str
+    feed_pct: float
+    overflow_pct: float
+    underflow_pct: float
+    recovery_underflow: float
 
 class RaoLynchResponse(BaseModel):
-    # Resultados del modelo
-    d50c_predicted: float
+    # Resultados clave
     d50c_experimental: float
+    d50c_predicted: float
     water_bypass_Rf: float
     capacity_Q: float
     
-    # Curva de partición para el gráfico
-    partition_curve: List[PartitionCurvePoint]
+    # Constantes de Calibración calculadas
+    k1_calculated: float
+    k3_calculated: float
     
-    # Reporte de granulometría calculada (pasantes, retenidos %)
-    granulometry_report: dict 
+    # Datos para gráficos
+    partition_curve: List[PartitionCurvePoint]
+    granulometry_curve: List[GranulometryPoint]
+    
+    # Tabla de balance
+    balance_table: List[BalanceRow]
+    
+    # Totales
+    summary: dict
