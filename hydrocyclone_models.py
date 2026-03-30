@@ -25,6 +25,35 @@ class HydrocycloneAnalysisRequest(BaseModel):
     feed_flow_rate: Optional[float] = None
     feed_flow_unit: Optional[str] = "tph" # "tph" (masa sólidos) o "m3h" (volumen pulpa)
 
+class PartitionCurvePoint(BaseModel):
+    size: float
+    actual_recovery: float
+    corrected_recovery: float
+    adjusted_recovery: Optional[float] = None
+
+class GranulometryPoint(BaseModel):
+    size: float
+    feed_passing: float
+    overflow_passing: float
+    underflow_passing: float
+    # Versiones ajustadas
+    feed_passing_adj: Optional[float] = None
+    overflow_passing_adj: Optional[float] = None
+    underflow_passing_adj: Optional[float] = None
+
+class BalanceRow(BaseModel):
+    size: str
+    # Datos experimentales (parciales %)
+    feed_pct: float
+    overflow_pct: float
+    underflow_pct: float
+    # Datos ajustados (parciales %)
+    feed_pct_adj: Optional[float] = None
+    overflow_pct_adj: Optional[float] = None
+    underflow_pct_adj: Optional[float] = None
+    
+    recovery_underflow: float # Eficiencia Ea
+
 class TrompParameters(BaseModel):
     d25c: float
     d50c: float
