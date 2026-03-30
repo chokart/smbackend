@@ -77,22 +77,35 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     d50c_exp = _calculate_d50c(sizes, (S_opt * p_u_exp[:-1] / p_f_exp[:-1] - Rf)/(1-Rf))
     d50c_adj = _calculate_d50c(sizes, E_c_adj_all[:-1])
 
-    # 5. Balance de Agua
+    # 5. Balance de Agua y Diagnóstico
     Rw = None
+    E_pan = float(E_a_adj_all[-1]) # Recuperación ajustada del fondo
+    consistency_err = None
+    diag_msg = "Datos procesados correctamente."
+    diag_level = "success"
+
     if request.feed_p_solids and request.overflow_p_solids and request.underflow_p_solids:
-        # F = O + U (Sólidos)
-        # Fw = Ow + Uw (Agua) -> F(1-Cp)/Cp = O(1-Co)/Co + U(1-Cu)/Cu
         cp, co, cu = request.feed_p_solids/100, request.overflow_p_solids/100, request.underflow_p_solids/100
-        # Rw = Uw / Fw
-        # Usando S = U/F -> U = S*F, O = (1-S)*F
-        # Rw = [S*F*(1-cu)/cu] / [F*(1-cp)/cp] = S * (1-cu)/cu * cp/(1-cp)
         Rw = S_opt * ((1 - cu) / cu) * (cp / (1 - cp))
-        # Si Rw es inconsistente, podríamos usar Rf como estimador o viceversa
+        
+        consistency_err = abs(E_pan - Rw)
+        
+        if consistency_err < 0.02:
+            diag_msg = "Excelente consistencia entre el fondo (pan) y el balance de agua."
+            diag_level = "success"
+        elif consistency_err < 0.05:
+            diag_msg = "Consistencia aceptable. Existe una pequeña desviación en los datos del fondo o % sólidos."
+            diag_level = "warning"
+        else:
+            diag_msg = "Atención: Discrepancia significativa (>5%) entre el fondo y el agua. Revise el pesaje del pan o los % de sólidos."
+            diag_level = "error"
 
     water_bal = WaterBalance(
         solids_recovery_S=float(S_opt * 100),
         water_recovery_Rw=float(Rw * 100) if Rw is not None else None,
         bypass_Rf=float(Rf * 100),
+        pan_recovery_Epan=float(E_pan * 100),
+        consistency_error=float(consistency_err * 100) if consistency_err is not None else None,
         feed_flow=100.0,
         overflow_flow=float((1 - S_opt) * 100),
         underflow_flow=float(S_opt * 100)
@@ -137,6 +150,8 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     return HydrocycloneAnalysisResponse(
         d50c_experimental=float(d50c_exp),
         d50c_adjusted=float(d50c_adj),
+        diagnosis_message=diag_msg,
+        diagnosis_level=diag_level,
         water_balance=water_bal,
         partition_curve=partition_pts,
         granulometry_curve=granulometry_pts,

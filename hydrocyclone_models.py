@@ -54,6 +54,9 @@ class WaterBalance(BaseModel):
     solids_recovery_S: float
     water_recovery_Rw: Optional[float] = None
     bypass_Rf: float
+    pan_recovery_Epan: Optional[float] = None # Recuperación calculada del fondo
+    consistency_error: Optional[float] = None # Diferencia |Epan - Rw|
+    
     # Flujos calculados (basados en 100 unidades de alimento o pesos totales)
     feed_flow: float
     overflow_flow: float
@@ -63,6 +66,10 @@ class HydrocycloneAnalysisResponse(BaseModel):
     # Resultados (Ajustados si es posible)
     d50c_experimental: float
     d50c_adjusted: Optional[float] = None
+    
+    # Diagnóstico y Alertas
+    diagnosis_message: Optional[str] = None
+    diagnosis_level: Optional[str] = "info" # "success", "warning", "error"
     
     # Balance de Masa y Agua
     water_balance: WaterBalance
