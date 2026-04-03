@@ -108,9 +108,8 @@ class HydrocycloneAnalysisResponse(BaseModel):
     granulometry_curve: List[GranulometryPoint]
     
     # Tablas de balance
-    balance_table: List[BalanceRow] # Tabla reconciliada (la actual)
+    balance_table: List[BalanceRow] # Tabla reconciliada (Ajustada)
     balance_solids_table: Optional[List[BalanceRow]] = None
-    balance_weights_table: Optional[List[BalanceRow]] = None
     
     # Resumen y mensajes
     summary: dict

@@ -103,41 +103,15 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
 
     # --- NUEVAS TABLAS SOLICITADAS ---
     
-    # 1. TABLA BALANCE POR PESOS (O + U)
-    # F = O + U en cada malla
-    w_f_calc_weights = o_raw + u_raw
-    tot_f_calc_weights = np.sum(w_f_calc_weights)
-    S_weights = np.sum(u_raw) / tot_f_calc_weights if tot_f_calc_weights > 0 else 0
-    
-    p_f_weights = (w_f_calc_weights / tot_f_calc_weights) * 100
-    p_o_weights = (o_raw / np.sum(o_raw)) * 100
-    p_u_weights = (u_raw / np.sum(u_raw)) * 100
-    
-    balance_weights_table = []
-    for i in range(len(sizes)):
-        rec_malla = (S_weights * p_u_weights[i] / p_f_weights[i]) if p_f_weights[i] > 0 else 0
-        balance_weights_table.append(BalanceRow(
-            size=f"{sizes[i]} µm",
-            feed_pct=float(p_f_weights[i]), overflow_pct=float(p_o_weights[i]), underflow_pct=float(p_u_weights[i]),
-            recovery_underflow=float(rec_malla)
-        ))
-    balance_weights_table.append(BalanceRow(
-        size="Fondo (Pan)",
-        feed_pct=float(p_f_weights[-1]), overflow_pct=float(p_o_weights[-1]), underflow_pct=float(p_u_weights[-1]),
-        recovery_underflow=float(S_weights * p_u_weights[-1] / p_f_weights[-1] if p_f_weights[-1] > 0 else 0)
-    ))
-
-    # 2. TABLA BALANCE POR % SOLIDOS (F recalcuado)
+    # 1. TABLA BALANCE POR % SOLIDOS (F recalculado)
     balance_solids_table = None
     if request.feed_p_solids and request.overflow_p_solids and request.underflow_p_solids:
         cp, co, cu = request.feed_p_solids/100, request.overflow_p_solids/100, request.underflow_p_solids/100
         # Fórmula de Recuperación de Sólidos S (Material Balance de 2 productos)
         if (cu - co) > 0 and cp > 0:
-            S_solids = (cu * (cp - co)) / (cp * (cu - co)) # Simplifica a (cp-co)/(cu-co) * (cu/cp)
-            # Asegurar S_solids entre 0 y 1 por errores de muestreo
+            S_solids = (cu * (cp - co)) / (cp * (cu - co))
             S_solids = max(0.01, min(0.99, S_solids))
             
-            # Recalcular alimento granulométrico: F_i = (1-S)*O_i + S*U_i
             p_o_norm = (o_raw / np.sum(o_raw)) * 100
             p_u_norm = (u_raw / np.sum(u_raw)) * 100
             p_f_solids_calc = (1 - S_solids) * p_o_norm + S_solids * p_u_norm
@@ -263,7 +237,6 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         granulometry_curve=granulometry_pts,
         balance_table=balance_table,
         balance_solids_table=balance_solids_table,
-        balance_weights_table=balance_weights_table,
         summary={"iterations": 1, "status": "Success"}
     )
 
