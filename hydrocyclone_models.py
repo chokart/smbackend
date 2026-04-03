@@ -107,8 +107,10 @@ class HydrocycloneAnalysisResponse(BaseModel):
     partition_curve: List[PartitionCurvePoint]
     granulometry_curve: List[GranulometryPoint]
     
-    # Tabla de balance
-    balance_table: List[BalanceRow]
+    # Tablas de balance
+    balance_table: List[BalanceRow] # Tabla reconciliada (la actual)
+    balance_solids_table: Optional[List[BalanceRow]] = None
+    balance_weights_table: Optional[List[BalanceRow]] = None
     
     # Resumen y mensajes
     summary: dict
