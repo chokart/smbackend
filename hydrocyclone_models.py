@@ -64,56 +64,27 @@ class BalanceRow(BaseModel):
     overflow_pass: Optional[float] = None
     underflow_pass: Optional[float] = None
     
-    # Datos ajustados (opcionales para balances específicos)
-    feed_pct_adj: Optional[float] = None
-    overflow_pct_adj: Optional[float] = None
-    underflow_pct_adj: Optional[float] = None
-    feed_pass_adj: Optional[float] = None
-    overflow_pass_adj: Optional[float] = None
-    underflow_pass_adj: Optional[float] = None
-    
-    recovery_underflow: float # Eficiencia Ea
+    # Eficiencias
+    recovery_underflow: float # Ea (Actual)
+    recovery_corrected: Optional[float] = None # Ec (Corregida)
 
-class TrompParameters(BaseModel):
-    d25c: float
+class HydrocycloneMetrics(BaseModel):
+    d50: float
     d50c: float
-    d75c: float
-    imperfection: float # (d75c - d25c) / (2 * d50c)
-
-class FlowData(BaseModel):
-    mass_solids: float
-    mass_water: float
-    vol_solids: float
-    vol_water: float
-    vol_pulp: float
-    p_solids: float
-
-class GlobalBalance(BaseModel):
-    feed: FlowData
-    overflow: FlowData
-    underflow: FlowData
-
-class WaterBalance(BaseModel):
-    solids_recovery_S: float
-    water_recovery_Rw: Optional[float] = None
-    bypass_Rf: float
-    pan_recovery_Epan: Optional[float] = None
-    consistency_error: Optional[float] = None
-    
-    # Flujos relativos (base 100)
-    feed_flow: float
-    overflow_flow: float
-    underflow_flow: float
-    
-    # Balance global absoluto (si se provee flujo)
-    global_balance: Optional[GlobalBalance] = None
+    bypass_rf: float
+    imperfection: float
+    solids_recovery_s: float
 
 class HydrocycloneAnalysisResponse(BaseModel):
-    # Resultados (Ajustados si es posible)
+    # Resultados por método
+    reconciled_metrics: Optional[HydrocycloneMetrics] = None
+    solids_metrics: Optional[HydrocycloneMetrics] = None
+    
+    # Datos para compatibilidad (legacy)
     d50c_experimental: float
     d50c_adjusted: Optional[float] = None
     
-    # Parámetros de Tromp
+    # Parámetros de Tromp (legacy)
     tromp: Optional[TrompParameters] = None
     
     # Diagnóstico y Alertas

@@ -4,7 +4,7 @@ from typing import List, Tuple, Optional
 from hydrocyclone_models import (
     HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse, 
     PartitionCurvePoint, GranulometryPoint, BalanceRow, WaterBalance,
-    TrompParameters, GlobalBalance, FlowData
+    TrompParameters, GlobalBalance, FlowData, HydrocycloneMetrics
 )
 
 def _interpolate_size(sizes, efficiencies, target_eff):
@@ -22,13 +22,9 @@ def _interpolate_size(sizes, efficiencies, target_eff):
     except:
         return 0.0
 
-def _calculate_d50c(sizes, efficiencies):
-    return _interpolate_size(sizes, efficiencies, 0.5)
-
 def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAnalysisResponse:
     # 1. Preparación de Datos Experimentales
     sizes = np.array([s.mesh_size for s in request.sieves])
-    # Ordenar por tamaño descendente para coherencia
     sort_idx = np.argsort(sizes)[::-1]
     sizes = sizes[sort_idx]
     
@@ -36,7 +32,6 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     w_o = np.array([request.sieves[i].weight_overflow for i in sort_idx])
     w_u = np.array([request.sieves[i].weight_underflow for i in sort_idx])
     
-    # Incluir fondo (Pan) al final
     f_raw = np.append(w_f, request.pan_feed)
     o_raw = np.append(w_o, request.pan_overflow)
     u_raw = np.append(w_u, request.pan_underflow)
@@ -44,7 +39,6 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     tot_f, tot_o, tot_u = np.sum(f_raw), np.sum(o_raw), np.sum(u_raw)
     if tot_f <= 0: return _empty_response()
 
-    # Porcentajes parciales experimentales
     p_f_exp = (f_raw / tot_f) * 100
     p_o_exp = (o_raw / tot_o) * 100
     p_u_exp = (u_raw / tot_u) * 100
@@ -66,7 +60,6 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         def obj_mesh(x):
             f, o, u = x
             return (f - f_e)**2 + (o - o_e)**2 + (u - u_e)**2
-        
         cons = {'type': 'eq', 'fun': lambda x: x[0] - ((1 - S_opt) * x[1] + S_opt * x[2])}
         res_m = minimize(obj_mesh, [f_e, o_e, u_e], constraints=cons, bounds=[(0, 100), (0, 100), (0, 100)])
         p_f_adj.append(res_m.x[0]), p_o_adj.append(res_m.x[1]), p_u_adj.append(res_m.x[2])
@@ -76,242 +69,140 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     p_o_adj = (p_o_adj / np.sum(p_o_adj)) * 100
     p_u_adj = (p_u_adj / np.sum(p_u_adj)) * 100
 
-    # 4. Cálculo de Eficiencias y Curvas
+    # 4. Cálculo de Eficiencias y Métricas (Reconciliado)
     E_a_adj_all = np.clip(S_opt * p_u_adj / p_f_adj, 0, 1)
-    Rf = float(E_a_adj_all[-1])
-    E_c_adj_all = (E_a_adj_all - Rf) / (1 - Rf) if Rf < 1 else np.zeros_like(E_a_adj_all)
+    Rf_adj = float(E_a_adj_all[-1])
+    E_c_adj_all = (E_a_adj_all - Rf_adj) / (1 - Rf_adj) if Rf_adj < 1 else np.zeros_like(E_a_adj_all)
     E_c_adj_all = np.clip(E_c_adj_all, 0, 1)
 
-    d50c_exp = _calculate_d50c(sizes, (S_opt * p_u_exp[:-1] / p_f_exp[:-1] - Rf)/(1-Rf))
-    d50c_adj = _calculate_d50c(sizes, E_c_adj_all[:-1])
+    d50_adj = _interpolate_size(sizes, E_a_adj_all[:-1], 0.5)
+    d50c_adj = _interpolate_size(sizes, E_c_adj_all[:-1], 0.5)
+    d25c_adj = _interpolate_size(sizes, E_c_adj_all[:-1], 0.25)
+    d75c_adj = _interpolate_size(sizes, E_c_adj_all[:-1], 0.75)
     
-    # 4.1 Parámetros de Tromp
-    d25c = _interpolate_size(sizes, E_c_adj_all[:-1], 0.25)
-    d75c = _interpolate_size(sizes, E_c_adj_all[:-1], 0.75)
-    tromp = TrompParameters(
-        d25c=float(d25c), d50c=float(d50c_adj), d75c=float(d75c),
-        imperfection=float((d75c - d25c) / (2 * d50c_adj)) if d50c_adj > 0 else 0
+    reconciled_metrics = HydrocycloneMetrics(
+        d50=float(d50_adj), d50c=float(d50c_adj), bypass_rf=float(Rf_adj * 100),
+        imperfection=float((d75c_adj - d25c_adj) / (2 * d50c_adj)) if d50c_adj > 0 else 0,
+        solids_recovery_s=float(S_opt * 100)
     )
 
-    # 5. Balance de Agua y Diagnóstico
-    # ... (código existente hasta el diagnóstico)
-    Rw = None
-    E_pan = float(E_a_adj_all[-1])
-    consistency_err = None
-    diag_msg = "Datos procesados correctamente."
-    diag_level = "success"
-
-    # --- NUEVAS TABLAS SOLICITADAS ---
-    
-    # 1. TABLA BALANCE POR % SOLIDOS (F recalculado)
+    # 5. Balance por % Sólidos
     balance_solids_table = None
+    solids_metrics = None
+    S_solids = 0
     if request.feed_p_solids and request.overflow_p_solids and request.underflow_p_solids:
         cp, co, cu = request.feed_p_solids/100, request.overflow_p_solids/100, request.underflow_p_solids/100
-        # Fórmula de Recuperación de Sólidos S (Material Balance de 2 productos)
         if (cu - co) > 0 and cp > 0:
             S_solids = (cu * (cp - co)) / (cp * (cu - co))
             S_solids = max(0.01, min(0.99, S_solids))
             
             p_o_norm = (o_raw / np.sum(o_raw)) * 100
             p_u_norm = (u_raw / np.sum(u_raw)) * 100
-            p_f_solids_calc = (1 - S_solids) * p_o_norm + S_solids * p_u_norm
+            p_f_sol_calc = (1 - S_solids) * p_o_norm + S_solids * p_u_norm
             
+            E_a_sol_all = np.clip(S_solids * p_u_norm / p_f_sol_calc, 0, 1)
+            Rf_sol = float(E_a_sol_all[-1])
+            E_c_sol_all = (E_a_sol_all - Rf_sol) / (1 - Rf_sol) if Rf_sol < 1 else np.zeros_like(E_a_sol_all)
+            
+            d50_sol = _interpolate_size(sizes, E_a_sol_all[:-1], 0.5)
+            d50c_sol = _interpolate_size(sizes, E_c_sol_all[:-1], 0.5)
+            d25c_sol = _interpolate_size(sizes, E_c_sol_all[:-1], 0.25)
+            d75c_sol = _interpolate_size(sizes, E_c_sol_all[:-1], 0.75)
+
+            solids_metrics = HydrocycloneMetrics(
+                d50=float(d50_sol), d50c=float(d50c_sol), bypass_rf=float(Rf_sol * 100),
+                imperfection=float((d75c_sol - d25c_sol) / (2 * d50c_sol)) if d50c_sol > 0 else 0,
+                solids_recovery_s=float(S_solids * 100)
+            )
+
+            # Construir tabla por sólidos con pasantes
+            f_pass_s = 100 - np.cumsum(p_f_sol_calc)
+            o_pass_s = 100 - np.cumsum(p_o_norm)
+            u_pass_s = 100 - np.cumsum(p_u_norm)
+            f_pass_s[-1], o_pass_s[-1], u_pass_s[-1] = 0, 0, 0
+
             balance_solids_table = []
             for i in range(len(sizes)):
-                rec_malla = (S_solids * p_u_norm[i] / p_f_solids_calc[i]) if p_f_solids_calc[i] > 0 else 0
                 balance_solids_table.append(BalanceRow(
                     size=f"{sizes[i]} µm",
-                    feed_pct=float(p_f_solids_calc[i]), overflow_pct=float(p_o_norm[i]), underflow_pct=float(p_u_norm[i]),
-                    recovery_underflow=float(rec_malla)
+                    feed_pct=float(p_f_sol_calc[i]), overflow_pct=float(p_o_norm[i]), underflow_pct=float(p_u_norm[i]),
+                    feed_pass=float(f_pass_s[i]), overflow_pass=float(o_pass_s[i]), underflow_pass=float(u_pass_s[i]),
+                    recovery_underflow=float(E_a_sol_all[i]), recovery_corrected=float(E_c_sol_all[i])
                 ))
             balance_solids_table.append(BalanceRow(
                 size="Fondo (Pan)",
-                feed_pct=float(p_f_solids_calc[-1]), overflow_pct=float(p_o_norm[-1]), underflow_pct=float(p_u_norm[-1]),
-                recovery_underflow=float(S_solids * p_u_norm[-1] / p_f_solids_calc[-1] if p_f_solids_calc[-1] > 0 else 0)
+                feed_pct=float(p_f_sol_calc[-1]), overflow_pct=float(p_o_norm[-1]), underflow_pct=float(p_u_norm[-1]),
+                feed_pass=0.0, overflow_pass=0.0, underflow_pass=0.0,
+                recovery_underflow=float(E_a_sol_all[-1]), recovery_corrected=0.0
+            ))
+            balance_solids_table.append(BalanceRow(
+                size="TOTAL", feed_pct=100.0, overflow_pct=100.0, underflow_pct=100.0,
+                recovery_underflow=float(S_solids), recovery_corrected=1.0
             ))
 
-    # --- FIN NUEVAS TABLAS ---
-
+    # 6. Diagnóstico y Balance de Agua
+    diag_msg, diag_level = "Datos procesados correctamente.", "success"
+    Rw = None
     if request.feed_p_solids and request.overflow_p_solids and request.underflow_p_solids:
         cp, co, cu = request.feed_p_solids/100, request.overflow_p_solids/100, request.underflow_p_solids/100
         Rw = S_opt * ((1 - cu) / cu) * (cp / (1 - cp))
-        consistency_err = abs(E_pan - Rw)
-        
-        if consistency_err < 0.02:
-            diag_msg = "Excelente consistencia entre el fondo (pan) y el balance de agua."
-            diag_level = "success"
-        elif consistency_err < 0.05:
-            diag_msg = "Consistencia aceptable."
-            diag_level = "warning"
-        else:
-            diag_msg = "Atención: Discrepancia significativa (>5%) entre el fondo y el agua."
-            diag_level = "error"
+        err = abs(Rf_adj - Rw)
+        if err < 0.02: diag_msg = "Excelente consistencia."
+        elif err < 0.05: diag_msg, diag_level = "Consistencia aceptable.", "warning"
+        else: diag_msg, diag_level = "Atención: Discrepancia significativa (>5%).", "error"
 
-    # 5.1 Balance Global Absoluto
-    global_bal = None
+    # 7. Balance Global Absoluto
+    global_bal, global_bal_sol = None, None
     if request.feed_flow_rate and request.feed_p_solids:
         cp = request.feed_p_solids / 100
-        co = (request.overflow_p_solids or 0) / 100
-        cu = (request.underflow_p_solids or 0) / 100
-        
-        # Calcular masa de sólidos en alimento (tph)
-        if request.feed_flow_unit == "tph":
-            f_mass_s = request.feed_flow_rate
-        else: # m3h de pulpa
-            factor = (1 / request.solid_density) + ((1 - cp) / cp)
-            f_mass_s = request.feed_flow_rate / factor
-            
-        def get_flow_data(mass_s, p_sol):
+        f_mass_s = request.feed_flow_rate if request.feed_flow_unit == "tph" else request.feed_flow_rate / ((1 / request.solid_density) + ((1 - cp) / cp))
+        def get_flow(mass_s, p_sol):
             p_sol = max(p_sol, 0.001)
-            mass_w = mass_s * (1 - p_sol) / p_sol
-            vol_s = mass_s / request.solid_density
-            vol_w = mass_w / 1.0
-            return FlowData(
-                mass_solids=float(mass_s), mass_water=float(mass_w),
-                vol_solids=float(vol_s), vol_water=float(vol_w),
-                vol_pulp=float(vol_s + vol_w), p_solids=float(p_sol * 100)
-            )
+            mw = mass_s * (1 - p_sol) / p_sol
+            vs, vw = mass_s / request.solid_density, mw / 1.0
+            return FlowData(mass_solids=float(mass_s), mass_water=float(mw), vol_solids=float(vs), vol_water=float(vw), vol_pulp=float(vs+vw), p_solids=float(p_sol*100))
+        
+        global_bal = GlobalBalance(feed=get_flow(f_mass_s, cp), overflow=get_flow(f_mass_s * (1 - S_opt), co), underflow=get_flow(f_mass_s * S_opt, cu))
+        if S_solids > 0:
+            global_bal_sol = GlobalBalance(feed=get_flow(f_mass_s, cp), overflow=get_flow(f_mass_s * (1 - S_solids), co), underflow=get_flow(f_mass_s * S_solids, cu))
 
-        global_bal = GlobalBalance(
-            feed=get_flow_data(f_mass_s, cp),
-            overflow=get_flow_data(f_mass_s * (1 - S_opt), co or cp),
-            underflow=get_flow_data(f_mass_s * S_opt, cu or cp)
-        )
-
-    water_bal = WaterBalance(
-        solids_recovery_S=float(S_opt * 100),
-        water_recovery_Rw=float(Rw * 100) if Rw is not None else None,
-        bypass_Rf=float(Rf * 100),
-        pan_recovery_Epan=float(E_pan * 100),
-        consistency_error=float(consistency_err * 100) if consistency_err is not None else None,
-        feed_flow=100.0,
-        overflow_flow=float((1 - S_opt) * 100),
-        underflow_flow=float(S_opt * 100),
-        global_balance=global_bal
-    )
-
-    # 6. Construcción de Respuesta y Tablas Detalladas
-    
-    # Cálculos Pasantes Experimentales
-    f_pass_exp = 100 - np.cumsum(p_f_exp)
-    o_pass_exp = 100 - np.cumsum(p_o_exp)
-    u_pass_exp = 100 - np.cumsum(p_u_exp)
-    # El pasante de la última fila (pan) debe ser 0
+    # 8. Gráficos y Tabla Reconciliada Final
+    f_pass_exp, o_pass_exp, u_pass_exp = 100 - np.cumsum(p_f_exp), 100 - np.cumsum(p_o_exp), 100 - np.cumsum(p_u_exp)
     f_pass_exp[-1], o_pass_exp[-1], u_pass_exp[-1] = 0, 0, 0
-
-    # Cálculos Pasantes Ajustados (Reconciliado)
-    f_pass_adj = 100 - np.cumsum(p_f_adj)
-    o_pass_adj = 100 - np.cumsum(p_o_adj)
-    u_pass_adj = 100 - np.cumsum(p_u_adj)
+    f_pass_adj, o_pass_adj, u_pass_adj = 100 - np.cumsum(p_f_adj), 100 - np.cumsum(p_o_adj), 100 - np.cumsum(p_u_adj)
     f_pass_adj[-1], o_pass_adj[-1], u_pass_adj[-1] = 0, 0, 0
 
     balance_table = []
     for i in range(len(sizes)):
         balance_table.append(BalanceRow(
-            size=f"{sizes[i]} µm",
-            feed_w=float(f_raw[i]), overflow_w=float(o_raw[i]), underflow_w=float(u_raw[i]),
+            size=f"{sizes[i]} µm", feed_w=float(f_raw[i]), overflow_w=float(o_raw[i]), underflow_w=float(u_raw[i]),
             feed_pct=float(p_f_exp[i]), overflow_pct=float(p_o_exp[i]), underflow_pct=float(p_u_exp[i]),
             feed_pass=float(f_pass_exp[i]), overflow_pass=float(o_pass_exp[i]), underflow_pass=float(u_pass_exp[i]),
-            feed_pct_adj=float(p_f_adj[i]), overflow_pct_adj=float(p_o_adj[i]), underflow_pct_adj=float(p_u_adj[i]),
-            feed_pass_adj=float(f_pass_adj[i]), overflow_pass_adj=float(o_pass_adj[i]), underflow_pass_adj=float(u_pass_adj[i]),
-            recovery_underflow=float(E_a_adj_all[i])
+            recovery_underflow=float(E_a_adj_all[i]), recovery_corrected=float(E_c_adj_all[i])
         ))
-    
-    # Agregar Fondo (Pan)
-    balance_table.append(BalanceRow(
-        size="Fondo (Pan)",
-        feed_w=float(f_raw[-1]), overflow_w=float(o_raw[-1]), underflow_w=float(u_raw[-1]),
-        feed_pct=float(p_f_exp[-1]), overflow_pct=float(p_o_exp[-1]), underflow_pct=float(p_u_exp[-1]),
-        feed_pass=0.0, overflow_pass=0.0, underflow_pass=0.0,
-        feed_pct_adj=float(p_f_adj[-1]), overflow_pct_adj=float(p_o_adj[-1]), underflow_pct_adj=float(p_u_adj[-1]),
-        feed_pass_adj=0.0, overflow_pass_adj=0.0, underflow_pass_adj=0.0,
-        recovery_underflow=float(E_a_adj_all[-1])
-    ))
+    balance_table.append(BalanceRow(size="Fondo (Pan)", feed_w=float(f_raw[-1]), overflow_w=float(o_raw[-1]), underflow_w=float(u_raw[-1]), feed_pct=float(p_f_exp[-1]), overflow_pct=float(p_o_exp[-1]), underflow_pct=float(p_u_exp[-1]), recovery_underflow=float(E_a_adj_all[-1]), recovery_corrected=0.0))
+    balance_table.append(BalanceRow(size="TOTAL", feed_w=float(tot_f), overflow_w=float(tot_o), underflow_w=float(tot_u), feed_pct=100.0, overflow_pct=100.0, underflow_pct=100.0, recovery_underflow=float(S_opt), recovery_corrected=1.0))
 
-    # Agregar Totalizador
-    balance_table.append(BalanceRow(
-        size="TOTAL",
-        feed_w=float(tot_f), overflow_w=float(tot_o), underflow_w=float(tot_u),
-        feed_pct=100.0, overflow_pct=100.0, underflow_pct=100.0,
-        feed_pct_adj=100.0, overflow_pct_adj=100.0, underflow_pct_adj=100.0,
-        recovery_underflow=float(S_opt)
-    ))
-
-    # Tabla por Sólidos (si existe)
-    if balance_solids_table:
-        p_f_solids = np.array([r.feed_pct for r in balance_solids_table])
-        p_o_solids = np.array([r.overflow_pct for r in balance_solids_table])
-        p_u_solids = np.array([r.underflow_pct for r in balance_solids_table])
-        
-        f_pass_s = 100 - np.cumsum(p_f_solids)
-        o_pass_s = 100 - np.cumsum(p_o_solids)
-        u_pass_s = 100 - np.cumsum(p_u_solids)
-        f_pass_s[-1], o_pass_s[-1], u_pass_s[-1] = 0, 0, 0
-        
-        for i in range(len(balance_solids_table)):
-            balance_solids_table[i].feed_pass = float(f_pass_s[i])
-            balance_solids_table[i].overflow_pass = float(o_pass_s[i])
-            balance_solids_table[i].underflow_pass = float(u_pass_s[i])
-        
-        # Agregar Totalizador a la tabla de sólidos
-        balance_solids_table.append(BalanceRow(
-            size="TOTAL",
-            feed_pct=100.0, overflow_pct=100.0, underflow_pct=100.0,
-            recovery_underflow=float(S_solids)
-        ))
-
-    # Puntos para gráficos
     granulometry_pts = []
     for i in range(len(sizes)):
-        g_pt = GranulometryPoint(
-            size=float(sizes[i]), 
-            feed_passing=float(f_pass_exp[i]), 
-            overflow_passing=float(o_pass_exp[i]), 
-            underflow_passing=float(u_pass_exp[i]),
-            feed_passing_adj=float(f_pass_adj[i]), 
-            overflow_passing_adj=float(o_pass_adj[i]), 
-            underflow_passing_adj=float(u_pass_adj[i])
-        )
-        # Añadir balance por sólidos si existe
-        if balance_solids_table:
-            # Los datos en balance_solids_table ya tienen los pasantes calculados (feed_pass, etc.)
-            g_pt.feed_passing_sol = float(balance_solids_table[i].feed_pass)
-            g_pt.overflow_passing_sol = float(balance_solids_table[i].overflow_pass)
-            g_pt.underflow_passing_sol = float(balance_solids_table[i].underflow_pass)
-        
+        g_pt = GranulometryPoint(size=float(sizes[i]), feed_passing=float(f_pass_exp[i]), overflow_passing=float(o_pass_exp[i]), underflow_passing=float(u_pass_exp[i]), feed_passing_adj=float(f_pass_adj[i]), overflow_passing_adj=float(o_pass_adj[i]), underflow_passing_adj=float(u_pass_adj[i]))
+        if balance_solids_table: g_pt.feed_passing_sol = float(balance_solids_table[i].feed_pass)
         granulometry_pts.append(g_pt)
 
     partition_pts = []
     for i in range(len(sizes)):
-        p_pt = PartitionCurvePoint(
-            size=float(sizes[i]), 
-            actual_recovery=float(S_opt * p_u_exp[i] / p_f_exp[i]), 
-            corrected_recovery=float((S_opt * p_u_exp[i] / p_f_exp[i] - Rf)/(1-Rf)),
-            adjusted_recovery=float(E_a_adj_all[i])
-        )
-        if balance_solids_table:
-            p_pt.solids_recovery = float(balance_solids_table[i].recovery_underflow)
-        
+        p_pt = PartitionCurvePoint(size=float(sizes[i]), actual_recovery=float(S_opt * p_u_exp[i] / p_f_exp[i]), corrected_recovery=float(E_c_adj_all[i]), adjusted_recovery=float(E_a_adj_all[i]))
+        if solids_metrics: p_pt.solids_recovery = float(E_a_sol_all[i])
         partition_pts.append(p_pt)
 
     return HydrocycloneAnalysisResponse(
-        d50c_experimental=float(d50c_exp),
-        d50c_adjusted=float(d50c_adj),
-        tromp=tromp,
-        diagnosis_message=diag_msg,
-        diagnosis_level=diag_level,
-        water_balance=water_bal,
-        partition_curve=partition_pts,
-        granulometry_curve=granulometry_pts,
-        balance_table=balance_table,
-        balance_solids_table=balance_solids_table,
-        summary={"iterations": 1, "status": "Success"}
+        reconciled_metrics=reconciled_metrics, solids_metrics=solids_metrics,
+        d50c_experimental=float(d50_adj), d50c_adjusted=float(d50c_adj),
+        tromp=TrompParameters(d25c=float(d25c_adj), d50c=float(d50c_adj), d75c=float(d75c_adj), imperfection=reconciled_metrics.imperfection),
+        diagnosis_message=diag_msg, diagnosis_level=diag_level,
+        water_balance=WaterBalance(solids_recovery_S=float(S_opt*100), water_recovery_Rw=float(Rw*100) if Rw else None, bypass_Rf=float(Rf_adj*100), pan_recovery_Epan=float(Rf_adj*100), feed_flow=100.0, overflow_flow=float((1-S_opt)*100), underflow_flow=float(S_opt*100), global_balance=global_bal, global_balance_solids=global_bal_sol),
+        partition_curve=partition_pts, granulometry_curve=granulometry_pts, balance_table=balance_table, balance_solids_table=balance_solids_table, summary={"status": "Success"}
     )
 
 def _empty_response():
-    # Implementación básica para evitar errores
-    return HydrocycloneAnalysisResponse(
-        d50c_experimental=0, d50c_adjusted=0, 
-        water_balance=WaterBalance(solids_recovery_S=0, bypass_Rf=0, feed_flow=100, overflow_flow=0, underflow_flow=0),
-        partition_curve=[], granulometry_curve=[], balance_table=[], summary={}
-    )
+    return HydrocycloneAnalysisResponse(d50c_experimental=0, d50c_adjusted=0, water_balance=WaterBalance(solids_recovery_S=0, bypass_Rf=0, feed_flow=100, overflow_flow=0, underflow_flow=0), partition_curve=[], granulometry_curve=[], balance_table=[], summary={})
