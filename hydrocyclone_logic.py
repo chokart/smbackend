@@ -223,7 +223,7 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         feed_w=float(f_raw[-1]), overflow_w=float(o_raw[-1]), underflow_w=float(u_raw[-1]),
         feed_pct=float(p_f_exp[-1]), overflow_pct=float(p_o_exp[-1]), underflow_pct=float(p_u_exp[-1]),
         feed_pass=0.0, overflow_pass=0.0, underflow_pass=0.0,
-        feed_pct_adj=float(p_f_adj[-1]), overflow_pct_adj=float(p_o_adj[-1]), underflow_pct=float(p_u_adj[-1]),
+        feed_pct_adj=float(p_f_adj[-1]), overflow_pct_adj=float(p_o_adj[-1]), underflow_pct_adj=float(p_u_adj[-1]),
         feed_pass_adj=0.0, overflow_pass_adj=0.0, underflow_pass_adj=0.0,
         recovery_underflow=float(E_a_adj_all[-1])
     ))
