@@ -27,30 +27,50 @@ class HydrocycloneAnalysisRequest(BaseModel):
 
 class PartitionCurvePoint(BaseModel):
     size: float
-    actual_recovery: float
-    corrected_recovery: float
-    adjusted_recovery: Optional[float] = None
+    actual_recovery: float # Experimental
+    corrected_recovery: float # Reconciliado Corregido
+    adjusted_recovery: Optional[float] = None # Reconciliado Ajustado
+    solids_recovery: Optional[float] = None # Balance por Sólidos
 
 class GranulometryPoint(BaseModel):
     size: float
+    # Experimentales
     feed_passing: float
     overflow_passing: float
     underflow_passing: float
-    # Versiones ajustadas
+    # Ajustados (Reconciliado)
     feed_passing_adj: Optional[float] = None
     overflow_passing_adj: Optional[float] = None
     underflow_passing_adj: Optional[float] = None
+    # Por Sólidos
+    feed_passing_sol: Optional[float] = None
+    overflow_passing_sol: Optional[float] = None
+    underflow_passing_sol: Optional[float] = None
 
 class BalanceRow(BaseModel):
     size: str
-    # Datos experimentales (parciales %)
+    # Pesos (solo para tabla experimental)
+    feed_w: Optional[float] = None
+    overflow_w: Optional[float] = None
+    underflow_w: Optional[float] = None
+    
+    # % Retenidos (Parciales)
     feed_pct: float
     overflow_pct: float
     underflow_pct: float
-    # Datos ajustados (parciales %)
+    
+    # % Pasantes (Acumulados)
+    feed_pass: Optional[float] = None
+    overflow_pass: Optional[float] = None
+    underflow_pass: Optional[float] = None
+    
+    # Datos ajustados (opcionales para balances específicos)
     feed_pct_adj: Optional[float] = None
     overflow_pct_adj: Optional[float] = None
     underflow_pct_adj: Optional[float] = None
+    feed_pass_adj: Optional[float] = None
+    overflow_pass_adj: Optional[float] = None
+    underflow_pass_adj: Optional[float] = None
     
     recovery_underflow: float # Eficiencia Ea
 
