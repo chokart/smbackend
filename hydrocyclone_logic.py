@@ -107,3 +107,5 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
 
 def _empty_response():
     return HydrocycloneAnalysisResponse(d50c_experimental=0, d50c_adjusted=0, water_balance=WaterBalance(solids_recovery_S=0, bypass_Rf=0, feed_flow=100, overflow_flow=0, underflow_flow=0), partition_curve=[], granulometry_curve=[], balance_table=[], summary={})
+#   F i n a l   v e r s i o n   w i t h   c o m p a r a t i v e   c u r v e s  
+ 
