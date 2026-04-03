@@ -44,12 +44,32 @@ class BalanceRow(BaseModel):
     feed_w: Optional[float] = None
     overflow_w: Optional[float] = None
     underflow_w: Optional[float] = None
+    
+    # Pesos Re-calculados (Ajustados)
+    feed_w_adj: Optional[float] = None
+    overflow_w_adj: Optional[float] = None
+    underflow_w_adj: Optional[float] = None
+    
+    # Pesos por Sólidos
+    feed_w_sol: Optional[float] = None
+    overflow_w_sol: Optional[float] = None
+    underflow_w_sol: Optional[float] = None
+    
     feed_pct: float
     overflow_pct: float
     underflow_pct: float
     feed_pass: Optional[float] = None
     overflow_pass: Optional[float] = None
     underflow_pass: Optional[float] = None
+    
+    # Datos Ajustados (para balance reconciliado)
+    feed_pct_adj: Optional[float] = None
+    overflow_pct_adj: Optional[float] = None
+    underflow_pct_adj: Optional[float] = None
+    feed_pass_adj: Optional[float] = None
+    overflow_pass_adj: Optional[float] = None
+    underflow_pass_adj: Optional[float] = None
+    
     recovery_underflow: float
     recovery_corrected: Optional[float] = None
 
@@ -57,7 +77,6 @@ class TrompParameters(BaseModel):
     d25c: float
     d50c: float
     d75c: float
-    imperfection: float
 
 class FlowData(BaseModel):
     mass_solids: float
@@ -88,7 +107,6 @@ class HydrocycloneMetrics(BaseModel):
     d50: float
     d50c: float
     bypass_rf: float
-    imperfection: float
     solids_recovery_s: float
 
 class HydrocycloneAnalysisResponse(BaseModel):
@@ -97,8 +115,6 @@ class HydrocycloneAnalysisResponse(BaseModel):
     d50c_experimental: float
     d50c_adjusted: Optional[float] = None
     tromp: Optional[TrompParameters] = None
-    diagnosis_message: Optional[str] = None
-    diagnosis_level: Optional[str] = "info"
     water_balance: WaterBalance
     partition_curve: List[PartitionCurvePoint]
     granulometry_curve: List[GranulometryPoint]
