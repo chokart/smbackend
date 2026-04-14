@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
+
 class SieveEntry(BaseModel):
     mesh_size: float
     weight_feed: float
@@ -43,17 +44,12 @@ class PartitionCurvePoint(BaseModel):
     corrected_recovery: float
     adjusted_recovery: Optional[float] = None
     solids_recovery: Optional[float] = None
-    plitt_recovery: Optional[float] = None # Nueva: Recuperación teórica de Plitt
+    plitt_recovery: Optional[float] = None # Recuperación teórica de Plitt
 
-class HydrocycloneMetrics(BaseModel):
-    d50: float
-    d50c: float
-    bypass_rf: float
-    solids_recovery_s: float
-    m_plitt: Optional[float] = None # Parámetro m de Plitt (agudeza)
-    s_plitt: Optional[float] = None # Parámetro S de Plitt (división de volumen)
-    p_plitt: Optional[float] = None # Presión calculada por Plitt
-
+class GranulometryPoint(BaseModel):
+    size: float
+    feed_passing: float
+    overflow_passing: float
     underflow_passing: float
     feed_passing_adj: Optional[float] = None
     overflow_passing_adj: Optional[float] = None
@@ -62,37 +58,38 @@ class HydrocycloneMetrics(BaseModel):
     overflow_passing_sol: Optional[float] = None
     underflow_passing_sol: Optional[float] = None
 
+class HydrocycloneMetrics(BaseModel):
+    d50: float
+    d50c: float
+    bypass_rf: float
+    solids_recovery_s: float
+    m_plitt: Optional[float] = None # Parámetro m de Plitt
+    s_plitt: Optional[float] = None # Parámetro S de Plitt
+    p_plitt: Optional[float] = None # Presión calculada por Plitt
+
 class BalanceRow(BaseModel):
     size: str
     feed_w: Optional[float] = None
     overflow_w: Optional[float] = None
     underflow_w: Optional[float] = None
-    
-    # Pesos Re-calculados (Ajustados)
     feed_w_adj: Optional[float] = None
     overflow_w_adj: Optional[float] = None
     underflow_w_adj: Optional[float] = None
-    
-    # Pesos por Sólidos
     feed_w_sol: Optional[float] = None
     overflow_w_sol: Optional[float] = None
     underflow_w_sol: Optional[float] = None
-    
     feed_pct: float
     overflow_pct: float
     underflow_pct: float
     feed_pass: Optional[float] = None
     overflow_pass: Optional[float] = None
     underflow_pass: Optional[float] = None
-    
-    # Datos Ajustados (para balance reconciliado)
     feed_pct_adj: Optional[float] = None
     overflow_pct_adj: Optional[float] = None
     underflow_pct_adj: Optional[float] = None
     feed_pass_adj: Optional[float] = None
     overflow_pass_adj: Optional[float] = None
     underflow_pass_adj: Optional[float] = None
-    
     recovery_underflow: float
     recovery_corrected: Optional[float] = None
 
@@ -125,12 +122,6 @@ class WaterBalance(BaseModel):
     underflow_flow: float
     global_balance: Optional[GlobalBalance] = None
     global_balance_solids: Optional[GlobalBalance] = None
-
-class HydrocycloneMetrics(BaseModel):
-    d50: float
-    d50c: float
-    bypass_rf: float
-    solids_recovery_s: float
 
 class HydrocycloneAnalysisResponse(BaseModel):
     reconciled_metrics: Optional[HydrocycloneMetrics] = None
