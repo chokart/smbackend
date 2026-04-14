@@ -57,12 +57,12 @@ def preview_water_equations(request: WaterReconciliationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar ecuaciones de agua: {e}")
 
-@app.post("/model/hydrocyclone/rao-lynch", response_model=HydrocycloneAnalysisResponse)
+@app.post("/model/hydrocyclone/plitt", response_model=HydrocycloneAnalysisResponse)
 def hydrocyclone_analysis(request: HydrocycloneAnalysisRequest):
     try:
         return analyze_hydrocyclone(request)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en el análisis del hidrociclón: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en el análisis del hidrociclón (Plitt): {e}")
 
 @app.get("/")
 def read_root():
