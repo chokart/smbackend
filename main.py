@@ -64,6 +64,14 @@ def hydrocyclone_analysis(request: HydrocycloneAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el análisis del hidrociclón (Plitt): {e}")
 
+@app.post("/model/hydrocyclone/calibrate")
+def hydrocyclone_calibration(request: HydrocycloneAnalysisRequest):
+    from hydrocyclone_logic import calibrate_hydrocyclone
+    try:
+        return calibrate_hydrocyclone(request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en la calibración del hidrociclón: {e}")
+
 @app.get("/")
 def read_root():
     return {"message": "Servidor de Balance Metalúrgico funcionando"}
