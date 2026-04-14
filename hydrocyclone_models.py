@@ -1,24 +1,41 @@
 from pydantic import BaseModel
 from typing import List, Optional
-
 class SieveEntry(BaseModel):
     mesh_size: float
     weight_feed: float
     weight_overflow: float
     weight_underflow: float
 
+class PlittGeometry(BaseModel):
+    Dc: float  # Diámetro del ciclón (cm)
+    Di: float  # Diámetro de entrada (cm)
+    Do: float  # Diámetro del buscador de vórtice (Vortex Finder) (cm)
+    Du: float  # Diámetro del ápex (Spigot) (cm)
+    h: float   # Distancia entre el vortex finder y el ápex (cm)
+    alpha: Optional[float] = 20.0 # Ángulo del cono (grados)
+
+class PlittParameters(BaseModel):
+    F1: float = 50.5  # Constante para d50c
+    F2: float = 1.88  # Constante para Capacidad (P)
+    F3: float = 18.8  # Constante para División de Flujo (S)
+    F4: float = 1.58  # Constante para Agudeza (m)
+
 class HydrocycloneAnalysisRequest(BaseModel):
+    mode: Optional[str] = "analysis" # "analysis" o "simulation"
     sieves: List[SieveEntry]
     pan_feed: float
     pan_overflow: float
     pan_underflow: float
-    pressure: Optional[float] = None
-    solid_density: float = 2.65
+    pressure: Optional[float] = None # kPa
+    solid_density: float = 2.65 # g/cm3
+    liquid_density: float = 1.0 # g/cm3
     feed_p_solids: Optional[float] = None
     overflow_p_solids: Optional[float] = None
     underflow_p_solids: Optional[float] = None
     feed_flow_rate: Optional[float] = None
     feed_flow_unit: Optional[str] = "tph"
+    geometry: Optional[PlittGeometry] = None
+    plitt_params: Optional[PlittParameters] = PlittParameters()
 
 class PartitionCurvePoint(BaseModel):
     size: float
@@ -26,11 +43,17 @@ class PartitionCurvePoint(BaseModel):
     corrected_recovery: float
     adjusted_recovery: Optional[float] = None
     solids_recovery: Optional[float] = None
+    plitt_recovery: Optional[float] = None # Nueva: Recuperación teórica de Plitt
 
-class GranulometryPoint(BaseModel):
-    size: float
-    feed_passing: float
-    overflow_passing: float
+class HydrocycloneMetrics(BaseModel):
+    d50: float
+    d50c: float
+    bypass_rf: float
+    solids_recovery_s: float
+    m_plitt: Optional[float] = None # Parámetro m de Plitt (agudeza)
+    s_plitt: Optional[float] = None # Parámetro S de Plitt (división de volumen)
+    p_plitt: Optional[float] = None # Presión calculada por Plitt
+
     underflow_passing: float
     feed_passing_adj: Optional[float] = None
     overflow_passing_adj: Optional[float] = None
