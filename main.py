@@ -72,6 +72,15 @@ def hydrocyclone_calibration(request: HydrocycloneAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en la calibración del hidrociclón: {e}")
 
+@app.post("/pulp-calculate", response_model=PulpCalculationResponse)
+def pulp_calculate(request: PulpCalculationRequest):
+    try:
+        return calculate_pulp_properties(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en el cálculo de pulpa: {e}")
+
 @app.get("/")
 def read_root():
     return {"message": "Servidor de Balance Metalúrgico funcionando"}
