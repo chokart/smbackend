@@ -6,6 +6,8 @@ from water_models import WaterReconciliationRequest, WaterReconciliationResponse
 from water_reconciliation import reconcile_water_data, _get_water_balance_system, format_water_equations
 from hydrocyclone_models import HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse
 from hydrocyclone_logic import analyze_hydrocyclone
+from pulp_models import PulpCalculationRequest, PulpCalculationResponse
+from pulp_logic import calculate_pulp_properties
 
 app = FastAPI()
 
