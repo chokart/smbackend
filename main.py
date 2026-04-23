@@ -53,8 +53,7 @@ def preview_equations(request: ReconciliationRequest):
 @app.post("/preview-water-equations")
 def preview_water_equations(request: WaterReconciliationRequest):
     try:
-        var_map, _, _ = _get_variable_mapping(request)
-        equations = _format_physical_equations(request, var_map)
+        equations = _format_physical_equations(request)
         return {"equations": equations}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar ecuaciones de agua: {e}")
