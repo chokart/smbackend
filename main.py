@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import ReconciliationRequest, ReconciliationResponse
 from reconciliation import reconcile_data_qp, _get_balance_system, format_equations_to_strings
 from water_models import WaterReconciliationRequest, WaterReconciliationResponse
-from water_reconciliation import reconcile_water_data, _get_water_balance_system, format_water_equations
+from water_reconciliation import reconcile_water_data, _get_variable_mapping, _format_physical_equations
 from hydrocyclone_models import HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse
 from hydrocyclone_logic import analyze_hydrocyclone
 from pulp_models import PulpCalculationRequest, PulpCalculationResponse
@@ -53,8 +53,8 @@ def preview_equations(request: ReconciliationRequest):
 @app.post("/preview-water-equations")
 def preview_water_equations(request: WaterReconciliationRequest):
     try:
-        A, b, var_map, _, _, _ = _get_water_balance_system(request)
-        equations = format_water_equations(A, b, var_map)
+        var_map, _, _ = _get_variable_mapping(request)
+        equations = _format_physical_equations(request, var_map)
         return {"equations": equations}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar ecuaciones de agua: {e}")
