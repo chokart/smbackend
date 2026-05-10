@@ -58,20 +58,12 @@ def preview_water_equations(request: WaterReconciliationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar ecuaciones de agua: {e}")
 
-@app.post("/model/hydrocyclone/plitt", response_model=HydrocycloneAnalysisResponse)
+@app.post("/model/hydrocyclone/analyze", response_model=HydrocycloneAnalysisResponse)
 def hydrocyclone_analysis(request: HydrocycloneAnalysisRequest):
     try:
         return analyze_hydrocyclone(request)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en el análisis del hidrociclón (Plitt): {e}")
-
-@app.post("/model/hydrocyclone/calibrate")
-def hydrocyclone_calibration(request: HydrocycloneAnalysisRequest):
-    from hydrocyclone_logic import calibrate_hydrocyclone
-    try:
-        return calibrate_hydrocyclone(request)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en la calibración del hidrociclón: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en el análisis del hidrociclón: {e}")
 
 @app.post("/pulp-calculate", response_model=PulpCalculationResponse)
 def pulp_calculate(request: PulpCalculationRequest):
