@@ -43,7 +43,6 @@ def _get_plitt_results(request: HydrocycloneAnalysisRequest, p_f_exp: np.ndarray
     Bpw = (S_v_calc/(S_v_calc+1) - f*Rs_c) / (1 - f*(1 - p.l_const*(1 - Rs_c)))
     Bpf = p.l_const * Bpw
     ea_sim = temp_ec * (1 - Bpf) + Bpf
-    # Añadir bypass al fondo
     ea_sim = np.append(ea_sim, Bpf)
     
     return {"d50c": d50c_calc, "m": m_calc, "S": S_v_calc, "P_kPa": H_calc/3.28084*rho_p*9.81, "Bpf": Bpf, "ea": ea_sim}
@@ -56,92 +55,133 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     w_f = np.array([request.sieves[i].weight_feed for i in sort_idx])
     f_raw = np.append(w_f, request.pan_feed); tot_f = max(np.sum(f_raw), 0.001); p_f_exp = (f_raw / tot_f) * 100
 
-    # 1. Obtener predicción de Plitt/CIMM
-    plitt = _get_plitt_results(request, p_f_exp, sizes)
-    
-    # 2. Reconciliación Real
-    if request.mode == "simulation" and plitt:
-        ea_adj = plitt["ea"]; S_opt = np.sum(p_f_exp * ea_adj) / 100.0; Rf_adj = plitt["Bpf"]
-        p_u_adj = (p_f_exp * ea_adj) / S_opt; p_o_adj = (p_f_exp * (1 - ea_adj)) / (1 - S_opt)
-        p_f_adj = p_f_exp
-    else:
-        w_o = np.array([request.sieves[i].weight_overflow for i in sort_idx]); w_u = np.array([request.sieves[i].weight_underflow for i in sort_idx])
-        o_raw = np.append(w_o, request.pan_overflow); u_raw = np.append(w_u, request.pan_underflow)
-        tot_o, tot_u = max(np.sum(o_raw), 0.001), max(np.sum(u_raw), 0.001)
-        p_o_exp, p_u_exp = (o_raw / tot_o) * 100, (u_raw / tot_u) * 100
-        def obj_s(S): return np.sum((p_f_exp - ((1 - S) * p_o_exp + S * p_u_exp))**2)
-        S_opt = float(minimize(obj_s, 0.5, bounds=[(0.01, 0.99)]).x[0])
-        p_f_adj, p_o_adj, p_u_adj = [], [], []
-        for f_e, o_e, u_e in zip(p_f_exp, p_o_exp, p_u_exp):
-            cons = {'type': 'eq', 'fun': lambda x: x[0] - ((1-S_opt)*x[1] + S_opt*x[2])}
-            res = minimize(lambda x: (x[0]-f_e)**2 + (x[1]-o_e)**2 + (x[2]-u_e)**2, [f_e, o_e, u_e], constraints=cons, bounds=[(0,100),(0,100),(0,100)]).x
-            p_f_adj.append(res[0]); p_o_adj.append(res[1]); p_u_adj.append(res[2])
-        p_f_adj, p_o_adj, p_u_adj = np.array(p_f_adj), np.array(p_o_adj), np.array(p_u_adj)
-        ea_adj = np.clip(S_opt*p_u_adj/np.where(p_f_adj>0, p_f_adj, 0.001), 0, 1)
-        Rf_adj = float(ea_adj[-1])
+    w_o = np.array([request.sieves[i].weight_overflow for i in sort_idx])
+    w_u = np.array([request.sieves[i].weight_underflow for i in sort_idx])
+    o_raw = np.append(w_o, request.pan_overflow); u_raw = np.append(w_u, request.pan_underflow)
+    tot_o, tot_u = max(np.sum(o_raw), 0.001), max(np.sum(u_raw), 0.001)
+    p_o_exp, p_u_exp = (o_raw / tot_o) * 100, (u_raw / tot_u) * 100
 
-    ec_adj = np.clip((ea_adj - Rf_adj)/(1-Rf_adj) if Rf_adj<1 else 0, 0, 1)
+    plitt = _get_plitt_results(request, p_f_exp, sizes)
+
+    # 1. BALANCE POR MALLAS (Optimización)
+    def obj_s(S): return np.sum((p_f_exp - ((1 - S) * p_o_exp + S * p_u_exp))**2)
+    S_mesh = float(minimize(obj_s, 0.5, bounds=[(0.01, 0.99)]).x[0])
+    p_f_mesh, p_o_mesh, p_u_mesh = [], [], []
+    for f_e, o_e, u_e in zip(p_f_exp, p_o_exp, p_u_exp):
+        cons = {'type': 'eq', 'fun': lambda x: x[0] - ((1-S_mesh)*x[1] + S_mesh*x[2])}
+        res = minimize(lambda x: (x[0]-f_e)**2 + (x[1]-o_e)**2 + (x[2]-u_e)**2, [f_e, o_e, u_e], constraints=cons, bounds=[(0,100),(0,100),(0,100)]).x
+        p_f_mesh.append(res[0]); p_o_mesh.append(res[1]); p_u_mesh.append(res[2])
+    p_f_mesh, p_o_mesh, p_u_mesh = np.array(p_f_mesh), np.array(p_o_mesh), np.array(p_u_mesh)
+    ea_mesh = np.clip(S_mesh*p_u_mesh/np.where(p_f_mesh>0, p_f_mesh, 0.001), 0, 1)
+    Rf_mesh = float(ea_mesh[-1])
+    ec_mesh = np.clip((ea_mesh - Rf_mesh)/(1-Rf_mesh) if Rf_mesh<1 else 0, 0, 1)
+
+    # 2. BALANCE POR SOLIDOS (Recalculando Alimento)
+    cp_f = request.feed_p_solids / 100 if request.feed_p_solids else 0.3
+    cp_o = request.overflow_p_solids / 100 if request.overflow_p_solids else cp_f * 0.8
+    cp_u = request.underflow_p_solids / 100 if request.underflow_p_solids else cp_f * 1.5
     
-    # 3. Generar tabla de comparación
-    comparison_table = []
+    try:
+        dil_f = (1 - cp_f) / cp_f if cp_f > 0 else 0
+        dil_o = (1 - cp_o) / cp_o if cp_o > 0 else 0
+        dil_u = (1 - cp_u) / cp_u if cp_u > 0 else 0
+        S_solids = (dil_f - dil_o) / (dil_u - dil_o) if (dil_u - dil_o) != 0 else S_mesh
+        S_solids = np.clip(S_solids, 0.01, 0.99)
+    except:
+        S_solids = S_mesh
+
+    p_o_solids = p_o_exp
+    p_u_solids = p_u_exp
+    p_f_solids = (1 - S_solids) * p_o_solids + S_solids * p_u_solids
+    ea_solids = np.clip(S_solids * p_u_solids / np.where(p_f_solids > 0, p_f_solids, 0.001), 0, 1)
+    Rf_solids = float(ea_solids[-1])
+    ec_solids = np.clip((ea_solids - Rf_solids)/(1-Rf_solids) if Rf_solids<1 else 0, 0, 1)
+
+    # Simulación CIMM
     p_u_sim = (p_f_exp * plitt["ea"]) / (np.sum(p_f_exp * plitt["ea"])/100) if plitt else np.zeros_like(p_f_exp)
     p_o_sim = (p_f_exp * (1 - plitt["ea"])) / (1 - np.sum(p_f_exp * plitt["ea"])/100) if plitt else np.zeros_like(p_f_exp)
-    
-    for i in range(len(sizes)):
+
+    comparison_table = []
+    for i in range(len(sizes) + 1):
+        idx = i if i < len(sizes) else -1
+        sz_str = f"{sizes[i]} µm" if i < len(sizes) else "Fondo (Pan)"
         comparison_table.append(BalanceRow(
-            size=f"{sizes[i]} µm", feed_pct_real=float(p_f_adj[i]), overflow_pct_real=float(p_o_adj[i]), underflow_pct_real=float(p_u_adj[i]),
-            feed_pct_sim=float(p_f_exp[i]), overflow_pct_sim=float(p_o_sim[i]), underflow_pct_sim=float(p_u_sim[i]),
-            recovery_real=float(ea_adj[i]), recovery_sim=float(plitt["ea"][i]) if plitt else 0
+            size=sz_str,
+            feed_pct_real=float(p_f_exp[idx]),
+            overflow_pct_real=float(p_o_exp[idx]),
+            underflow_pct_real=float(p_u_exp[idx]),
+            
+            feed_pct_mesh=float(p_f_mesh[idx]),
+            overflow_pct_mesh=float(p_o_mesh[idx]),
+            underflow_pct_mesh=float(p_u_mesh[idx]),
+            recovery_mesh=float(ea_mesh[idx]),
+            
+            feed_pct_solids=float(p_f_solids[idx]),
+            overflow_pct_solids=float(p_o_solids[idx]),
+            underflow_pct_solids=float(p_u_solids[idx]),
+            recovery_solids=float(ea_solids[idx]),
+            
+            feed_pct_sim=float(p_f_exp[idx]),
+            overflow_pct_sim=float(p_o_sim[idx]),
+            underflow_pct_sim=float(p_u_sim[idx]),
+            recovery_sim=float(plitt["ea"][idx]) if plitt else 0
         ))
-    comparison_table.append(BalanceRow(size="Fondo (Pan)", feed_pct_real=float(p_f_adj[-1]), overflow_pct_real=float(p_o_adj[-1]), underflow_pct_real=float(p_u_adj[-1]), feed_pct_sim=float(p_f_exp[-1]), overflow_pct_sim=float(p_o_sim[-1]), underflow_pct_sim=float(p_u_sim[-1]), recovery_real=Rf_adj, recovery_sim=plitt["Bpf"] if plitt else 0))
 
-    # Métricas y curvas
-    reconciled_metrics = HydrocycloneMetrics(d50=_interpolate_size(sizes, ea_adj[:-1], 0.5), d50c=_interpolate_size(sizes, ec_adj[:-1], 0.5), bypass_rf=Rf_adj*100, solids_recovery_s=S_opt*100)
+    metrics_mesh = HydrocycloneMetrics(d50=_interpolate_size(sizes, ea_mesh[:-1], 0.5), d50c=_interpolate_size(sizes, ec_mesh[:-1], 0.5), bypass_rf=Rf_mesh*100, solids_recovery_s=S_mesh*100)
+    metrics_solids = HydrocycloneMetrics(d50=_interpolate_size(sizes, ea_solids[:-1], 0.5), d50c=_interpolate_size(sizes, ec_solids[:-1], 0.5), bypass_rf=Rf_solids*100, solids_recovery_s=S_solids*100)
+    
     if plitt:
-        reconciled_metrics.m_plitt, reconciled_metrics.s_plitt, reconciled_metrics.p_plitt = plitt["m"], plitt["S"], plitt["P_kPa"]
+        metrics_mesh.m_plitt = metrics_solids.m_plitt = plitt["m"]
+        metrics_mesh.s_plitt = metrics_solids.s_plitt = plitt["S"]
+        metrics_mesh.p_plitt = metrics_solids.p_plitt = plitt["P_kPa"]
 
-    # Balances de agua
-    global_bal = None
-    if request.feed_flow_rate and request.feed_p_solids:
-        cp = request.feed_p_solids/100; fm = request.feed_flow_rate if request.feed_flow_unit == "tph" else request.feed_flow_rate / ((1/request.solid_density) + ((1-cp)/cp))
-        def get_f(m, p): mw = m*(1-p/100)/(p/100) if p>0 else 0; vs = m/request.solid_density; return FlowData(mass_solids=m, mass_water=mw, vol_solids=vs, vol_water=mw, vol_pulp=vs+mw, p_solids=p)
-        global_bal = GlobalBalance(feed=get_f(fm, cp*100), overflow=get_f(fm*(1-S_opt), (request.overflow_p_solids or cp*100)), underflow=get_f(fm*S_opt, (request.underflow_p_solids or cp*100)))
+    part_pts = []
+    for i in range(len(sizes)):
+        part_pts.append(PartitionCurvePoint(
+            size=float(sizes[i]),
+            adjusted_recovery_mesh=float(ea_mesh[i]),
+            adjusted_recovery_solids=float(ea_solids[i]),
+            plitt_recovery=float(plitt["ea"][i]) if plitt else None
+        ))
 
-    # Curvas granulométricas
-    fe, oe, ue = 100-np.cumsum(p_f_adj), 100-np.cumsum(p_o_adj), 100-np.cumsum(p_u_adj); fe[-1]=oe[-1]=ue[-1]=0
-    gran_pts = [GranulometryPoint(size=float(sizes[i]), feed_passing=float(fe[i]), overflow_passing=float(oe[i]), underflow_passing=float(ue[i]), feed_passing_adj=float(fe[i]), overflow_passing_adj=float(oe[i]), underflow_passing_adj=float(ue[i])) for i in range(len(sizes))]
-    part_pts = [PartitionCurvePoint(size=float(sizes[i]), actual_recovery=float(ea_adj[i]), corrected_recovery=float(ec_adj[i]), adjusted_recovery=float(ea_adj[i]), plitt_recovery=float(plitt["ea"][i]) if plitt else None) for i in range(len(sizes))]
+    fe, oe, ue = 100-np.cumsum(p_f_exp), 100-np.cumsum(p_o_exp), 100-np.cumsum(p_u_exp); fe[-1]=oe[-1]=ue[-1]=0
+    gran_pts = [GranulometryPoint(size=float(sizes[i]), feed_passing=float(fe[i]), overflow_passing=float(oe[i]), underflow_passing=float(ue[i])) for i in range(len(sizes))]
 
     return HydrocycloneAnalysisResponse(
-        reconciled_metrics=reconciled_metrics, d50c_experimental=reconciled_metrics.d50, d50c_adjusted=plitt["d50c"] if plitt else 0,
-        tromp=TrompParameters(d25c=_interpolate_size(sizes, ec_adj[:-1], 0.25), d50c=reconciled_metrics.d50c, d75c=_interpolate_size(sizes, ec_adj[:-1], 0.75)),
-        water_balance=WaterBalance(solids_recovery_S=S_opt*100, bypass_Rf=Rf_adj*100, feed_flow=100, overflow_flow=(1-S_opt)*100, underflow_flow=S_opt*100, global_balance=global_bal),
-        partition_curve=part_pts, granulometry_curve=gran_pts, comparison_table=comparison_table, summary={"status": "Success"}
+        metrics_mesh=metrics_mesh,
+        metrics_solids=metrics_solids,
+        d50c_adjusted=plitt["d50c"] if plitt else 0,
+        tromp_mesh=TrompParameters(d25c=_interpolate_size(sizes, ec_mesh[:-1], 0.25), d50c=metrics_mesh.d50c, d75c=_interpolate_size(sizes, ec_mesh[:-1], 0.75)),
+        water_balance=WaterBalance(solids_recovery_S=S_mesh*100, bypass_Rf=Rf_mesh*100, feed_flow=100, overflow_flow=(1-S_mesh)*100, underflow_flow=S_mesh*100),
+        partition_curve=part_pts,
+        granulometry_curve=gran_pts,
+        comparison_table=comparison_table,
+        summary={"status": "Success"}
     )
 
 def calibrate_hydrocyclone(request: HydrocycloneAnalysisRequest) -> dict:
-    res = analyze_hydrocyclone(request); m_exp = res.reconciled_metrics
+    res = analyze_hydrocyclone(request); m_exp = res.metrics_mesh # Calibramos usando el balance por mallas
     if not m_exp or not request.geometry: return {"error": "No hay datos suficientes"}
     g = request.geometry; rho_s, rho_l = request.solid_density, request.liquid_density
     cp = (request.feed_p_solids or 30)/100; f = (cp/rho_s)/((cp/rho_s)+((1-cp)/rho_l)); rho_p = 1/((cp/rho_s)+((1-cp)/rho_l))
     Q_m3h = request.feed_flow_rate if request.feed_flow_unit == "m3h" else (request.feed_flow_rate/rho_p/cp if cp>0 else 100)
     DC_in, h_in, DI_in, DO_in, DU_in = g.Dc/2.54, g.h/2.54, g.Di/2.54, g.Do/2.54, g.Du/2.54
-    # Calibración a1, a2, a3
+    
     H_target = (request.pressure/(rho_p*9.81))*3.28084 if request.pressure else 10.0
     a1_new = H_target / ((Q_m3h**1.46 * np.exp(-7.63*f + 10.79*f**2)) / (DC_in**0.2 * h_in**0.15 * DI_in**0.51 * DO_in**1.65 * DU_in**0.53))
     a2_new = m_exp.d50c / ((DC_in**0.44 * DI_in**0.58 * DO_in**1.91 * np.exp(11.12*f)) / (DU_in**0.8 * h_in**0.37 * Q_m3h**0.44 * (rho_s-1)**0.5))
     S_target = m_exp.solids_recovery_s / (100.0 - m_exp.solids_recovery_s + 0.001)
     a3_new = S_target / ((h_in**0.19 * (DU_in / DO_in)**2.64 * np.exp(-4.33*f + 8.77*f**2)) / (H_target**0.54 * DC_in**0.38))
-    # Calibración a4 (m)
-    def fit_m(m_test): return np.sum([(1.0-np.exp(-0.693*(pt.size/m_exp.d50c)**m_test) - pt.corrected_recovery)**2 for pt in res.partition_curve])
+    
+    def fit_m(m_test): return np.sum([(1.0-np.exp(-0.693*(pt.size/m_exp.d50c)**m_test) - np.clip((pt.adjusted_recovery_mesh - m_exp.bypass_rf/100)/(1-m_exp.bypass_rf/100),0,1))**2 for pt in res.partition_curve])
     m_real = float(minimize(fit_m, 1.5, bounds=[(0.5, 5.0)]).x[0])
     a4_new = np.log(max(m_real / (((DC_in**2 * h_in) / Q_m3h)**0.15), 0.001)) + 1.58 * (S_target / (S_target + 1))
-    # Calibración l
+    
     def fit_l(l_test):
-        Rs_c = np.sum((np.array([r.feed_pct_real for r in res.comparison_table[:-1]])/100) * np.array([1.0-np.exp(-0.693*(float(r.size.split()[0])/m_exp.d50c)**m_real) for r in res.comparison_table[:-1]]))
+        Rs_c = np.sum((np.array([r.feed_pct_mesh for r in res.comparison_table[:-1]])/100) * np.array([1.0-np.exp(-0.693*(float(r.size.split()[0])/m_exp.d50c)**m_real) for r in res.comparison_table[:-1]]))
         bpw = (S_target/(S_target+1)-f*Rs_c)/(1-f*(1-l_test*(1-Rs_c))); return (l_test*bpw - m_exp.bypass_rf/100)**2
     l_new = float(minimize(fit_l, 1.0, bounds=[(0.1, 2.0)]).x[0])
     return {"a1": round(a1_new, 3), "a2": round(a2_new, 3), "a3": round(a3_new, 3), "a4": round(a4_new, 3), "l_const": round(l_new, 3)}
 
 def _empty_response():
-    return HydrocycloneAnalysisResponse(d50c_experimental=0, d50c_adjusted=0, water_balance=WaterBalance(solids_recovery_S=0, bypass_Rf=0, feed_flow=100, overflow_flow=0, underflow_flow=0), partition_curve=[], granulometry_curve=[], comparison_table=[], summary={})
+    return HydrocycloneAnalysisResponse(water_balance=WaterBalance(solids_recovery_S=0, bypass_Rf=0, feed_flow=100, overflow_flow=0, underflow_flow=0), partition_curve=[], granulometry_curve=[], comparison_table=[], summary={})

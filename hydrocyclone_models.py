@@ -41,9 +41,8 @@ class HydrocycloneAnalysisRequest(BaseModel):
 
 class PartitionCurvePoint(BaseModel):
     size: float
-    actual_recovery: float
-    corrected_recovery: float
-    adjusted_recovery: Optional[float] = None
+    adjusted_recovery_mesh: float
+    adjusted_recovery_solids: float
     plitt_recovery: Optional[float] = None
 
 class GranulometryPoint(BaseModel):
@@ -51,9 +50,6 @@ class GranulometryPoint(BaseModel):
     feed_passing: float
     overflow_passing: float
     underflow_passing: float
-    feed_passing_adj: Optional[float] = None
-    overflow_passing_adj: Optional[float] = None
-    underflow_passing_adj: Optional[float] = None
 
 class HydrocycloneMetrics(BaseModel):
     d50: float
@@ -66,14 +62,24 @@ class HydrocycloneMetrics(BaseModel):
 
 class BalanceRow(BaseModel):
     size: str
-    feed_pct_real: float      # % Reconciliado (o experimental)
+    feed_pct_real: float
     overflow_pct_real: float
     underflow_pct_real: float
-    feed_pct_sim: float       # % Simulado por Plitt
+    
+    feed_pct_mesh: float
+    overflow_pct_mesh: float
+    underflow_pct_mesh: float
+    recovery_mesh: float
+    
+    feed_pct_solids: float
+    overflow_pct_solids: float
+    underflow_pct_solids: float
+    recovery_solids: float
+    
+    feed_pct_sim: float
     overflow_pct_sim: float
     underflow_pct_sim: float
-    recovery_real: float      # Ea Reconciliada
-    recovery_sim: float       # Ea Simulada (Plitt)
+    recovery_sim: float
 
 class TrompParameters(BaseModel):
     d25c: float
@@ -102,10 +108,10 @@ class WaterBalance(BaseModel):
     global_balance: Optional[GlobalBalance] = None
 
 class HydrocycloneAnalysisResponse(BaseModel):
-    reconciled_metrics: Optional[HydrocycloneMetrics] = None
-    d50c_experimental: float
+    metrics_mesh: Optional[HydrocycloneMetrics] = None
+    metrics_solids: Optional[HydrocycloneMetrics] = None
     d50c_adjusted: Optional[float] = None
-    tromp: Optional[TrompParameters] = None
+    tromp_mesh: Optional[TrompParameters] = None
     water_balance: WaterBalance
     partition_curve: List[PartitionCurvePoint]
     granulometry_curve: List[GranulometryPoint]
