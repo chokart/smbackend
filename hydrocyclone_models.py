@@ -7,21 +7,6 @@ class SieveEntry(BaseModel):
     weight_overflow: float
     weight_underflow: float
 
-class PlittGeometry(BaseModel):
-    Dc: float
-    Di: float
-    Do: float
-    Du: float
-    h: float
-    alpha: Optional[float] = 20.0
-
-class PlittParameters(BaseModel):
-    a1: float = 1.0
-    a2: float = 1.0
-    a3: float = 1.0
-    a4: float = 1.0
-    l_const: float = 1.0
-
 class HydrocycloneAnalysisRequest(BaseModel):
     mode: Optional[str] = "analysis" 
     sieves: List[SieveEntry]
@@ -36,14 +21,11 @@ class HydrocycloneAnalysisRequest(BaseModel):
     underflow_p_solids: Optional[float] = None
     feed_flow_rate: Optional[float] = None
     feed_flow_unit: Optional[str] = "tph"
-    geometry: Optional[PlittGeometry] = None
-    plitt_params: Optional[PlittParameters] = PlittParameters()
 
 class PartitionCurvePoint(BaseModel):
     size: float
     adjusted_recovery_mesh: float
     adjusted_recovery_solids: float
-    plitt_recovery: Optional[float] = None
 
 class GranulometryPoint(BaseModel):
     size: float
@@ -56,9 +38,6 @@ class HydrocycloneMetrics(BaseModel):
     d50c: float
     bypass_rf: float
     solids_recovery_s: float
-    m_plitt: Optional[float] = None
-    s_plitt: Optional[float] = None
-    p_plitt: Optional[float] = None
 
 class BalanceRow(BaseModel):
     size: str
@@ -75,11 +54,6 @@ class BalanceRow(BaseModel):
     overflow_pct_solids: float
     underflow_pct_solids: float
     recovery_solids: float
-    
-    feed_pct_sim: float
-    overflow_pct_sim: float
-    underflow_pct_sim: float
-    recovery_sim: float
 
 class TrompParameters(BaseModel):
     d25c: float
@@ -110,7 +84,6 @@ class WaterBalance(BaseModel):
 class HydrocycloneAnalysisResponse(BaseModel):
     metrics_mesh: Optional[HydrocycloneMetrics] = None
     metrics_solids: Optional[HydrocycloneMetrics] = None
-    d50c_adjusted: Optional[float] = None
     tromp_mesh: Optional[TrompParameters] = None
     water_balance: WaterBalance
     partition_curve: List[PartitionCurvePoint]
