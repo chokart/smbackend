@@ -60,6 +60,19 @@ class TrompParameters(BaseModel):
     d50c: float
     d75c: float
 
+class FlowComparison(BaseModel):
+    pulp_mesh: float
+    solids_mesh: float
+    water_mesh: float
+    pulp_solids: float
+    solids_solids: float
+    water_solids: float
+
+class GlobalFlowBalance(BaseModel):
+    feed: FlowComparison
+    overflow: FlowComparison
+    underflow: FlowComparison
+
 class FlowData(BaseModel):
     mass_solids: float
     mass_water: float
@@ -89,4 +102,5 @@ class HydrocycloneAnalysisResponse(BaseModel):
     partition_curve: List[PartitionCurvePoint]
     granulometry_curve: List[GranulometryPoint]
     comparison_table: List[BalanceRow]
+    global_flow_balance: Optional[GlobalFlowBalance] = None
     summary: dict

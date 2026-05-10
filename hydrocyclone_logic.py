@@ -4,7 +4,8 @@ from typing import List, Tuple, Optional
 from hydrocyclone_models import (
     HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse, 
     PartitionCurvePoint, GranulometryPoint, BalanceRow, WaterBalance,
-    TrompParameters, GlobalBalance, FlowData, HydrocycloneMetrics
+    TrompParameters, GlobalBalance, FlowData, HydrocycloneMetrics,
+    FlowComparison, GlobalFlowBalance
 )
 
 def _interpolate_size(sizes, efficiencies, target_eff):
@@ -88,6 +89,52 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
             recovery_solids=float(ea_solids[idx])
         ))
 
+    # Flow Calculations
+    rho_s = request.solid_density
+    rho_l = request.liquid_density
+    
+    if request.feed_flow_unit == "tph":
+        Ms_f = request.feed_flow_rate if request.feed_flow_rate else 100.0
+    else: # m3h
+        Vp_f = request.feed_flow_rate if request.feed_flow_rate else 100.0
+        factor = (1/rho_s + (1-cp_f)/(cp_f*rho_l)) if cp_f > 0 else 1.0
+        Ms_f = Vp_f / factor if factor > 0 else 0
+
+    def calc_flows(Ms, cp):
+        if cp <= 0: return 0.0, 0.0, 0.0
+        Mw = Ms * (1 - cp) / cp
+        Mp = Ms + Mw
+        return Mp, Ms, Mw
+
+    Mp_f, _, Mw_f = calc_flows(Ms_f, cp_f)
+
+    # Mesh Flow Balance
+    Ms_u_m = Ms_f * S_mesh
+    Ms_o_m = Ms_f * (1 - S_mesh)
+    Mp_u_m, _, Mw_u_m = calc_flows(Ms_u_m, cp_u)
+    Mp_o_m, _, Mw_o_m = calc_flows(Ms_o_m, cp_o)
+    
+    # Solids Flow Balance
+    Ms_u_s = Ms_f * S_solids
+    Ms_o_s = Ms_f * (1 - S_solids)
+    Mp_u_s, _, Mw_u_s = calc_flows(Ms_u_s, cp_u)
+    Mp_o_s, _, Mw_o_s = calc_flows(Ms_o_s, cp_o)
+
+    global_flow_balance = GlobalFlowBalance(
+        feed=FlowComparison(
+            pulp_mesh=Mp_f, solids_mesh=Ms_f, water_mesh=Mw_f,
+            pulp_solids=Mp_f, solids_solids=Ms_f, water_solids=Mw_f
+        ),
+        overflow=FlowComparison(
+            pulp_mesh=Mp_o_m, solids_mesh=Ms_o_m, water_mesh=Mw_o_m,
+            pulp_solids=Mp_o_s, solids_solids=Ms_o_s, water_solids=Mw_o_s
+        ),
+        underflow=FlowComparison(
+            pulp_mesh=Mp_u_m, solids_mesh=Ms_u_m, water_mesh=Mw_u_m,
+            pulp_solids=Mp_u_s, solids_solids=Ms_u_s, water_solids=Mw_u_s
+        )
+    )
+
     metrics_mesh = HydrocycloneMetrics(d50=_interpolate_size(sizes, ea_mesh[:-1], 0.5), d50c=_interpolate_size(sizes, ec_mesh[:-1], 0.5), bypass_rf=Rf_mesh*100, solids_recovery_s=S_mesh*100)
     metrics_solids = HydrocycloneMetrics(d50=_interpolate_size(sizes, ea_solids[:-1], 0.5), d50c=_interpolate_size(sizes, ec_solids[:-1], 0.5), bypass_rf=Rf_solids*100, solids_recovery_s=S_solids*100)
 
@@ -110,6 +157,7 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         partition_curve=part_pts,
         granulometry_curve=gran_pts,
         comparison_table=comparison_table,
+        global_flow_balance=global_flow_balance,
         summary={"status": "Success"}
     )
 
