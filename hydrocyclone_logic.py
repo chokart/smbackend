@@ -5,7 +5,7 @@ from hydrocyclone_models import (
     HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse, 
     PartitionCurvePoint, GranulometryPoint, BalanceRow, WaterBalance,
     TrompParameters, GlobalBalance, FlowData, HydrocycloneMetrics,
-    FlowComparison, GlobalFlowBalance
+    FlowComparison, GlobalFlowBalance, MassBalanceRow
 )
 
 def _interpolate_size(sizes, efficiencies, target_eff):
