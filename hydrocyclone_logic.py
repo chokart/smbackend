@@ -175,6 +175,22 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     fe, oe, ue = 100-np.cumsum(p_f_exp), 100-np.cumsum(p_o_exp), 100-np.cumsum(p_u_exp); fe[-1]=oe[-1]=ue[-1]=0
     gran_pts = [GranulometryPoint(size=float(sizes[i]), feed_passing=float(fe[i]), overflow_passing=float(oe[i]), underflow_passing=float(ue[i])) for i in range(len(sizes))]
 
+    # Populate Mass Balance Table (tph per sieve)
+    mass_balance_table = []
+    for i in range(len(sizes) + 1):
+        idx = i if i < len(sizes) else -1
+        sz_str = f"{sizes[i]} µm" if i < len(sizes) else "Fondo (Pan)"
+        
+        mass_balance_table.append(MassBalanceRow(
+            size=sz_str,
+            feed_tph_mesh=float((p_f_mesh[idx]/100.0) * Ms_f),
+            overflow_tph_mesh=float((p_o_mesh[idx]/100.0) * Ms_o_m),
+            underflow_tph_mesh=float((p_u_mesh[idx]/100.0) * Ms_u_m),
+            feed_tph_solids=float((p_f_solids[idx]/100.0) * Ms_f),
+            overflow_tph_solids=float((p_o_solids[idx]/100.0) * Ms_o_s),
+            underflow_tph_solids=float((p_u_solids[idx]/100.0) * Ms_u_s)
+        ))
+
     return HydrocycloneAnalysisResponse(
         metrics_mesh=metrics_mesh,
         metrics_solids=metrics_solids,
@@ -190,6 +206,7 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
         partition_curve=part_pts,
         granulometry_curve=gran_pts,
         comparison_table=comparison_table,
+        mass_balance_table=mass_balance_table,
         global_flow_balance=global_flow_balance,
         summary={"status": "Success"}
     )

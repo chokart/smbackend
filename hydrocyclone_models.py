@@ -94,6 +94,15 @@ class WaterBalance(BaseModel):
     underflow_flow: float
     global_balance: Optional[GlobalBalance] = None
 
+class MassBalanceRow(BaseModel):
+    size: str
+    feed_tph_mesh: float
+    overflow_tph_mesh: float
+    underflow_tph_mesh: float
+    feed_tph_solids: float
+    overflow_tph_solids: float
+    underflow_tph_solids: float
+
 class HydrocycloneAnalysisResponse(BaseModel):
     metrics_mesh: Optional[HydrocycloneMetrics] = None
     metrics_solids: Optional[HydrocycloneMetrics] = None
@@ -102,5 +111,6 @@ class HydrocycloneAnalysisResponse(BaseModel):
     partition_curve: List[PartitionCurvePoint]
     granulometry_curve: List[GranulometryPoint]
     comparison_table: List[BalanceRow]
+    mass_balance_table: Optional[List[MassBalanceRow]] = None
     global_flow_balance: Optional[GlobalFlowBalance] = None
     summary: dict
