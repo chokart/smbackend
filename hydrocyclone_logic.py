@@ -143,15 +143,21 @@ def analyze_hydrocyclone(request: HydrocycloneAnalysisRequest) -> HydrocycloneAn
     global_flow_balance = GlobalFlowBalance(
         feed=FlowComparison(
             pulp_mesh=Mp_f, solids_mesh=Ms_f, water_mesh=Mw_f,
-            pulp_solids=global_balance.feed.vol_pulp, solids_solids=Ms_f, water_solids=global_balance.feed.mass_water
+            pulp_solids=global_balance.feed.mass_solids + global_balance.feed.mass_water, 
+            solids_solids=Ms_f, 
+            water_solids=global_balance.feed.mass_water
         ),
         overflow=FlowComparison(
             pulp_mesh=Mp_o_m, solids_mesh=Ms_o_m, water_mesh=Mw_o_m,
-            pulp_solids=global_balance.overflow.vol_pulp, solids_solids=Ms_o_s, water_solids=global_balance.overflow.mass_water
+            pulp_solids=global_balance.overflow.mass_solids + global_balance.overflow.mass_water, 
+            solids_solids=Ms_o_s, 
+            water_solids=global_balance.overflow.mass_water
         ),
         underflow=FlowComparison(
             pulp_mesh=Mp_u_m, solids_mesh=Ms_u_m, water_mesh=Mw_u_m,
-            pulp_solids=global_balance.underflow.vol_pulp, solids_solids=Ms_u_s, water_solids=global_balance.underflow.mass_water
+            pulp_solids=global_balance.underflow.mass_solids + global_balance.underflow.mass_water, 
+            solids_solids=Ms_u_s, 
+            water_solids=global_balance.underflow.mass_water
         )
     )
 
