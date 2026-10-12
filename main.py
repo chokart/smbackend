@@ -4,8 +4,6 @@ from models import ReconciliationRequest, ReconciliationResponse
 from reconciliation import reconcile_data_qp, _get_balance_system, format_equations_to_strings
 from water_models import WaterReconciliationRequest, WaterReconciliationResponse
 from water_reconciliation import reconcile_water_data, _get_variable_mapping, _format_physical_equations
-from hydrocyclone_models import HydrocycloneAnalysisRequest, HydrocycloneAnalysisResponse
-from hydrocyclone_logic import analyze_hydrocyclone
 from pulp_models import PulpCalculationRequest, PulpCalculationResponse
 from pulp_logic import calculate_pulp_properties
 
@@ -58,12 +56,6 @@ def preview_water_equations(request: WaterReconciliationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al generar ecuaciones de agua: {e}")
 
-@app.post("/model/hydrocyclone/analyze", response_model=HydrocycloneAnalysisResponse)
-def hydrocyclone_analysis(request: HydrocycloneAnalysisRequest):
-    try:
-        return analyze_hydrocyclone(request)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en el análisis del hidrociclón: {e}")
 
 @app.post("/pulp-calculate", response_model=PulpCalculationResponse)
 def pulp_calculate(request: PulpCalculationRequest):
