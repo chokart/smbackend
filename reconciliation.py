@@ -5,14 +5,14 @@ from typing import List, Dict, Any, Tuple, Optional
 
 def _get_balance_nodes(request: ReconciliationRequest):
     """
-    Identifica nodos que deben cumplir balance de masa.
-    Cualquier nodo con flujos de entrada y salida, o explícitamente de tipo PROCESO.
+    Identifica nodos que deben cumplir balance de conservación de masa.
+    Un nodo debe tener flujos de entrada y salida para cumplir la conservación en estado estacionario.
     """
     balance_nodes = []
     for node in request.nodes:
         has_in = any(f.target == node.id for f in request.flows)
         has_out = any(f.source == node.id for f in request.flows)
-        if (has_in and has_out) or node.node_type == NodeType.PROCESO:
+        if has_in and has_out:
             balance_nodes.append(node)
     return balance_nodes
 

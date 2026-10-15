@@ -38,12 +38,13 @@ class WaterFlowData(BaseModel):
         return 0.0
 
     def get_solid_error(self) -> float:
-        if self.tonelaje_solido_error is not None:
+        if self.tonelaje_solido_error is not None and self.tonelaje_solido_error > 0:
             return float(self.tonelaje_solido_error)
-        if self.tonelaje_pulpa_error is not None:
+        if self.tonelaje_pulpa_error is not None and self.tonelaje_pulpa_error > 0:
             cp = self.porcentaje_solidos or 30.0
             return float(self.tonelaje_pulpa_error * (cp / 100.0))
-        return 0.1
+        s_val = self.get_solid_tonnage()
+        return max(s_val * 0.02 + 0.1, 0.1)
 
     def is_solid_fixed(self) -> bool:
         if self.tonelaje_solido_fixed:
