@@ -5,41 +5,45 @@ from typing import List, Dict, Any, Tuple
 
 def _get_variable_mapping(request: WaterReconciliationRequest):
     """
-    Mapea cada flujo a índices en el vector de estado y genera valores iniciales inteligentes.
-    Evita inicializaciones en cero para que las derivadas parciales del Jacobiano no colapsen.
+    Mapea cada flujo a índices en el vector de estado (S: tonelaje de sólido seco, Cp: % sólidos)
+    y genera valores iniciales inteligentes.
     """
     var_map = {}
     initial_guess = []
     bounds = []
     var_idx = 0
 
-    # Heurística para flujos no medidos
-    measured_pulps = [f.data.tonelaje_pulpa for f in request.flows if not f.data.not_measured and f.data.tonelaje_pulpa > 0]
-    avg_pulp = float(np.mean(measured_pulps)) if measured_pulps else 100.0
+    # Heurística para flujos de sólido no medidos
+    measured_solids = [f.data.get_solid_tonnage() for f in request.flows if not f.data.not_measured and f.data.get_solid_tonnage() > 0]
+    avg_solid = float(np.mean(measured_solids)) if measured_solids else 30.0
 
     for flow in request.flows:
-        # Variable: Tonelaje Pulpa (Q)
-        var_map[f"q_{flow.id}"] = var_idx
-        q_val = flow.data.tonelaje_pulpa
-        if flow.data.not_measured and q_val <= 0:
-            q_val = avg_pulp
-        initial_guess.append(q_val)
-        bounds.append((flow.data.tonelaje_pulpa, flow.data.tonelaje_pulpa) if flow.data.tonelaje_pulpa_fixed else (0.0, None))
+        s_val = flow.data.get_solid_tonnage()
+        is_fixed = flow.data.is_solid_fixed()
+
+        # Variable: Tonelaje Sólido Seco (S)
+        var_map[f"s_{flow.id}"] = var_idx
+        if flow.data.not_measured and s_val <= 0:
+            s_val = avg_solid
+        initial_guess.append(s_val)
+        bounds.append((s_val, s_val) if is_fixed else (0.0, None))
         var_idx += 1
 
         # Variable: Porcentaje Sólidos (Cp)
         var_map[f"cp_{flow.id}"] = var_idx
         cp_val = flow.data.porcentaje_solidos
-        # Si es no medido y está en cero, usar semilla de 30% para garantizar gradiente activo
+        # Si es no medido y está en cero o muy bajo, usar semilla de 30%
         if getattr(flow.data, 'porcentaje_solidos_not_measured', False) and cp_val <= 0 and not flow.data.porcentaje_solidos_fixed:
+            cp_val = 30.0
+        elif cp_val <= 0:
             cp_val = 30.0
         initial_guess.append(cp_val)
         
-        # Límites para % Sólidos: entre 0 y 100%
+        # Límites para % Sólidos: entre 0.1 y 100% para evitar división por cero en pulpa
         if flow.data.porcentaje_solidos_fixed:
             bounds.append((flow.data.porcentaje_solidos, flow.data.porcentaje_solidos))
         else:
-            bounds.append((0.0, 100.0))
+            bounds.append((0.1, 100.0))
         var_idx += 1
 
     return var_map, np.array(initial_guess, dtype=float), bounds
@@ -55,32 +59,34 @@ def _get_balance_nodes(request: WaterReconciliationRequest):
     return balance_nodes
 
 def _get_constraints(y: np.ndarray, request: WaterReconciliationRequest, var_map: dict):
-    """Calcula los residuos de las restricciones de balance de pulpa y de sólidos secos."""
+    """Calcula los residuos de las restricciones de balance de sólidos secos y de pulpa total."""
     balance_nodes = _get_balance_nodes(request)
     residuals = []
 
     for node in balance_nodes:
-        total_mass_balance = 0.0
         solids_mass_balance = 0.0
+        pulp_mass_balance = 0.0
 
         for flow in request.flows:
-            q_idx = var_map[f"q_{flow.id}"]
+            s_idx = var_map[f"s_{flow.id}"]
             cp_idx = var_map[f"cp_{flow.id}"]
-            Q = y[q_idx]
-            Cp = y[cp_idx]
+            S = y[s_idx]
+            Cp = max(y[cp_idx], 0.01) # Protección contra cero
 
             factor = 1.0 if flow.target == node.id else (-1.0 if flow.source == node.id else 0.0)
             if factor != 0:
-                total_mass_balance += factor * Q
-                solids_mass_balance += factor * (Q * Cp / 100.0)
+                # Balance de sólidos secos (Lineal)
+                solids_mass_balance += factor * S
+                # Balance de pulpa total: Q = S / (Cp / 100) = S * 100 / Cp
+                pulp_mass_balance += factor * (S * 100.0 / Cp)
 
-        residuals.append(total_mass_balance)
         residuals.append(solids_mass_balance)
+        residuals.append(pulp_mass_balance)
 
     return np.array(residuals, dtype=float)
 
 def _get_jacobian(y: np.ndarray, request: WaterReconciliationRequest, var_map: dict):
-    """Calcula la matriz Jacobiana exacta de las restricciones no lineales."""
+    """Calcula la matriz Jacobiana exacta de las restricciones de sólidos y pulpa."""
     balance_nodes = _get_balance_nodes(request)
     num_vars = len(y)
     num_constraints = len(balance_nodes) * 2
@@ -88,43 +94,51 @@ def _get_jacobian(y: np.ndarray, request: WaterReconciliationRequest, var_map: d
 
     row = 0
     for node in balance_nodes:
-        # Fila 1: Balance de masa total de pulpa (Lineal)
+        # Fila 1: Balance de sólidos secos (Lineal: d/dS = factor, d/dCp = 0)
         for flow in request.flows:
-            q_idx = var_map[f"q_{flow.id}"]
+            s_idx = var_map[f"s_{flow.id}"]
             factor = 1.0 if flow.target == node.id else (-1.0 if flow.source == node.id else 0.0)
             if factor != 0:
-                J[row, q_idx] = factor
+                J[row, s_idx] = factor
         row += 1
 
-        # Fila 2: Balance de sólidos secos (No lineal: d/dQ = factor * Cp/100, d/dCp = factor * Q/100)
+        # Fila 2: Balance de pulpa total: Q = S * 100 / Cp
+        # d/dS = factor * 100 / Cp
+        # d/dCp = - factor * 100 * S / Cp^2
         for flow in request.flows:
-            q_idx = var_map[f"q_{flow.id}"]
+            s_idx = var_map[f"s_{flow.id}"]
             cp_idx = var_map[f"cp_{flow.id}"]
-            Q = y[q_idx]
-            Cp = y[cp_idx]
+            S = y[s_idx]
+            Cp = max(y[cp_idx], 0.01)
             factor = 1.0 if flow.target == node.id else (-1.0 if flow.source == node.id else 0.0)
             if factor != 0:
-                J[row, q_idx] = factor * Cp / 100.0
-                J[row, cp_idx] = factor * Q / 100.0
+                J[row, s_idx] = factor * 100.0 / Cp
+                J[row, cp_idx] = - factor * 100.0 * S / (Cp ** 2)
         row += 1
 
     return J
 
 def reconcile_water_data(request: WaterReconciliationRequest):
     """
-    Ejecuta la reconciliación del balance hídrico y de pulpa usando SLSQP
-    con Jacobiano analítico y matriz de covarianza posterior Gauss-Markov.
+    Ejecuta la reconciliación del balance hídrico basada en tonelaje de sólido seco y % de sólidos
+    usando SLSQP con Jacobiano analítico y matriz de covarianza posterior Gauss-Markov.
     """
     var_map, y_init, bounds = _get_variable_mapping(request)
 
     measured_indices, measured_values, variances = [], [], []
+
     for flow in request.flows:
-        # Pulpa (Q)
-        if not flow.data.not_measured and not flow.data.tonelaje_pulpa_fixed:
-            measured_indices.append(var_map[f"q_{flow.id}"])
-            measured_values.append(flow.data.tonelaje_pulpa)
+        s_val = flow.data.get_solid_tonnage()
+        is_fixed = flow.data.is_solid_fixed()
+
+        # Sólidos Secos (S)
+        if not flow.data.not_measured and not is_fixed:
+            measured_indices.append(var_map[f"s_{flow.id}"])
+            measured_values.append(s_val)
             # Protección contra varianza cero
-            err = flow.data.tonelaje_pulpa_error if flow.data.tonelaje_pulpa_error > 0 else max(flow.data.tonelaje_pulpa * 0.02 + 0.1, 0.1)
+            err = flow.data.get_solid_error()
+            if err <= 0:
+                err = max(s_val * 0.02 + 0.1, 0.1)
             variances.append(err ** 2)
 
         # % Sólidos (Cp)
@@ -175,8 +189,8 @@ def reconcile_water_data(request: WaterReconciliationRequest):
     J = _get_jacobian(y_hat, request, var_map)
     try:
         if J.size > 0:
-            S = J @ V_in @ J.T
-            V_out = V_in - V_in @ J.T @ np.linalg.pinv(S) @ J @ V_in
+            S_mat = J @ V_in @ J.T
+            V_out = V_in - V_in @ J.T @ np.linalg.pinv(S_mat) @ J @ V_in
             std_devs = np.sqrt(np.maximum(np.diag(V_out), 0.0))
         else:
             std_devs = np.sqrt(np.diag(V_in))
@@ -185,8 +199,8 @@ def reconcile_water_data(request: WaterReconciliationRequest):
 
     # Forzar error cero en variables fijas
     for flow in request.flows:
-        if flow.data.tonelaje_pulpa_fixed:
-            std_devs[var_map[f"q_{flow.id}"]] = 0.0
+        if flow.data.is_solid_fixed():
+            std_devs[var_map[f"s_{flow.id}"]] = 0.0
         if flow.data.porcentaje_solidos_fixed:
             std_devs[var_map[f"cp_{flow.id}"]] = 0.0
 
@@ -195,20 +209,34 @@ def reconcile_water_data(request: WaterReconciliationRequest):
 def _build_response(request: WaterReconciliationRequest, y_hat: np.ndarray, std_devs: np.ndarray, var_map: dict, success=True):
     reconciled_flows = []
     for flow in request.flows:
-        q_idx = var_map[f"q_{flow.id}"]
+        s_idx = var_map[f"s_{flow.id}"]
         cp_idx = var_map[f"cp_{flow.id}"]
-        q_val = float(y_hat[q_idx])
+        s_val = float(y_hat[s_idx])
         cp_val = float(y_hat[cp_idx])
+        s_err = float(std_devs[s_idx])
+        cp_err = float(std_devs[cp_idx])
+
+        # Pulpa calculada: Q = S / (Cp / 100)
+        q_calc = float(s_val * 100.0 / cp_val) if cp_val > 0 else 0.0
+        # Agua calculada: W = Q - S
+        w_calc = float(q_calc - s_val)
+
+        # Propagación de error para pulpa calculada: dQ = sqrt( (100/Cp * dS)^2 + (-100*S/Cp^2 * dCp)^2 )
+        q_err = float(np.sqrt((100.0 / cp_val * s_err) ** 2 + (100.0 * s_val / (cp_val ** 2) * cp_err) ** 2)) if cp_val > 0 else 0.0
 
         reconciled_flows.append({
             "id": flow.id,
             "corrected_data": {
-                "tonelaje_pulpa_corregido": q_val,
-                "tonelaje_pulpa_error": float(std_devs[q_idx]),
+                "tonelaje_solido_corregido": s_val,
+                "tonelaje_solido_error": s_err,
                 "porcentaje_solidos_corregido": cp_val,
-                "porcentaje_solidos_error": float(std_devs[cp_idx]),
-                "tonelaje_solido_calculado": float(q_val * cp_val / 100.0),
-                "tonelaje_agua_calculado": float(q_val * (1.0 - cp_val / 100.0))
+                "porcentaje_solidos_error": cp_err,
+                "tonelaje_pulpa_calculado": q_calc,
+                "tonelaje_agua_calculado": w_calc,
+                # Compatibilidad hacia atrás:
+                "tonelaje_solido_calculado": s_val,
+                "tonelaje_pulpa_corregido": q_calc,
+                "tonelaje_pulpa_error": q_err
             }
         })
 
@@ -216,24 +244,29 @@ def _build_response(request: WaterReconciliationRequest, y_hat: np.ndarray, std_
     balance_nodes = _get_balance_nodes(request)
     residuals = []
     for node in balance_nodes:
-        in_pulp = sum(y_hat[var_map[f"q_{f.id}"]] for f in request.flows if f.target == node.id)
-        out_pulp = sum(y_hat[var_map[f"q_{f.id}"]] for f in request.flows if f.source == node.id)
-        in_solids = sum(y_hat[var_map[f"q_{f.id}"]] * y_hat[var_map[f"cp_{f.id}"]] / 100.0 for f in request.flows if f.target == node.id)
-        out_solids = sum(y_hat[var_map[f"q_{f.id}"]] * y_hat[var_map[f"cp_{f.id}"]] / 100.0 for f in request.flows if f.source == node.id)
+        in_solids = sum(y_hat[var_map[f"s_{f.id}"]] for f in request.flows if f.target == node.id)
+        out_solids = sum(y_hat[var_map[f"s_{f.id}"]] for f in request.flows if f.source == node.id)
+        
+        in_pulp = sum(y_hat[var_map[f"s_{f.id}"]] * 100.0 / max(y_hat[var_map[f"cp_{f.id}"]], 0.01) for f in request.flows if f.target == node.id)
+        out_pulp = sum(y_hat[var_map[f"s_{f.id}"]] * 100.0 / max(y_hat[var_map[f"cp_{f.id}"]], 0.01) for f in request.flows if f.source == node.id)
+
+        in_water = in_pulp - in_solids
+        out_water = out_pulp - out_solids
+
         residuals.append({
             "node": node.label,
-            "residual_pulpa": float(in_pulp - out_pulp),
             "residual_solidos": float(in_solids - out_solids),
-            "residual_agua": float((in_pulp - in_solids) - (out_pulp - out_solids))
+            "residual_pulpa": float(in_pulp - out_pulp),
+            "residual_agua": float(in_water - out_water)
         })
 
     report = {
         "success": bool(success),
         "methodology": [
-            "Optimización no lineal SLSQP con gradiente y Jacobiano analítico de alta precisión.",
-            "Detección topológica automática de nodos de conservación de masa de agua y pulpa.",
-            "Estimación de covarianza e incertidumbre posterior mediante proyección de Gauss-Markov.",
-            "Cálculo estequiométrico exacto de tonelaje de agua y sólidos por flujo reconciliado."
+            "Optimización no lineal SLSQP basada en conservación de masa de sólidos secos y balance hídrico.",
+            "Variables independientes de medición y ajuste: Tonelaje de Sólidos Secos (S) y Porcentaje de Sólidos (%S / Cp).",
+            "Cálculo estequiométrico exacto de caudal de pulpa y agua a partir de sólidos y concentración.",
+            "Estimación de covarianza e incertidumbre posterior mediante proyección analítica de Gauss-Markov."
         ],
         "equations": _format_physical_equations(request),
         "node_residuals": residuals
@@ -241,19 +274,19 @@ def _build_response(request: WaterReconciliationRequest, y_hat: np.ndarray, std_
     return reconciled_flows, report
 
 def _format_physical_equations(request: WaterReconciliationRequest) -> List[str]:
-    """Genera ecuaciones algebraicas legibles para previsualización."""
+    """Genera ecuaciones algebraicas legibles para previsualización con sólido seco y % sólidos."""
     nodes = _get_balance_nodes(request)
     eqs = []
     for node in nodes:
-        in_f = [f"Q_{f.id}" for f in request.flows if f.target == node.id]
-        out_f = [f"Q_{f.id}" for f in request.flows if f.source == node.id]
-        in_str = " + ".join(in_f) if in_f else "0"
-        out_str = " - ".join(out_f) if out_f else "0"
-        eqs.append(f"[{node.label}] Balance de Pulpa: {in_str} - {out_str} = 0")
-
-        in_s = [f"(Cp_{f.id}/100)*Q_{f.id}" for f in request.flows if f.target == node.id]
-        out_s = [f"(Cp_{f.id}/100)*Q_{f.id}" for f in request.flows if f.source == node.id]
+        in_s = [f"S_{f.id}" for f in request.flows if f.target == node.id]
+        out_s = [f"S_{f.id}" for f in request.flows if f.source == node.id]
         in_s_str = " + ".join(in_s) if in_s else "0"
         out_s_str = " - ".join(out_s) if out_s else "0"
         eqs.append(f"[{node.label}] Balance de Sólidos Secos: {in_s_str} - {out_s_str} = 0")
+
+        in_p = [f"(100/Cp_{f.id})*S_{f.id}" for f in request.flows if f.target == node.id]
+        out_p = [f"(100/Cp_{f.id})*S_{f.id}" for f in request.flows if f.source == node.id]
+        in_p_str = " + ".join(in_p) if in_p else "0"
+        out_p_str = " - ".join(out_p) if out_p else "0"
+        eqs.append(f"[{node.label}] Balance de Pulpa Total: {in_p_str} - {out_p_str} = 0")
     return eqs
