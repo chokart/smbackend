@@ -7,8 +7,10 @@ from models import ReconciliationRequest, ReconciliationResponse
 from reconciliation import reconcile_data_qp, _get_balance_system, format_equations_to_strings
 from water_models import WaterReconciliationRequest, WaterReconciliationResponse
 from water_reconciliation import reconcile_water_data, _format_physical_equations
+from datetime import datetime
 from pulp_models import PulpCalculationRequest, PulpCalculationResponse
 from pulp_logic import calculate_pulp_properties
+from level_models import LevelReadingCreate, LevelReadingResponse
 import database as db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -164,6 +166,98 @@ def pulp_calculate(request: PulpCalculationRequest):
     except Exception as e:
         logger.exception("Error en el cálculo de pulpa:")
         raise HTTPException(status_code=500, detail=f"Error en el cálculo de pulpa: {e}")
+
+# --- ENDPOINTS TELEMETRÍA SENSOR DE NIVEL (ESP32) ---
+@app.post("/level/reading", response_model=LevelReadingResponse)
+def receive_level_reading(reading: LevelReadingCreate):
+    """
+    Recibe la medición transmitida por el ESP32 vía WiFi HTTP POST.
+    """
+    try:
+        saved = db.save_level_reading(
+            device_id=reading.device_id or "esp32_tanque_1",
+            distance_cm=round(reading.distance_cm, 2),
+            level_cm=round(reading.level_cm, 2),
+            percentage=round(reading.percentage, 2)
+        )
+        return LevelReadingResponse(
+            id=saved["id"],
+            device_id=saved["device_id"],
+            distance_cm=saved["distance_cm"],
+            level_cm=saved["level_cm"],
+            percentage=saved["percentage"],
+            created_at=saved["created_at"],
+            is_online=True,
+            seconds_ago=0.0
+        )
+    except Exception as e:
+        logger.exception("Error al registrar lectura de nivel:")
+        raise HTTPException(status_code=500, detail=f"Error guardando telemetría: {e}")
+
+@app.get("/level/latest", response_model=Optional[LevelReadingResponse])
+def get_latest_level(device_id: Optional[str] = None):
+    """
+    Obtiene la última lectura del sensor de nivel y determina si el ESP32 está online.
+    """
+    latest = db.get_latest_level_reading(device_id=device_id)
+    if not latest:
+        return None
+    
+    # Evaluar estado de conexión según la antigüedad de la última lectura (umbral: 15 seg)
+    seconds_ago = None
+    is_online = False
+    try:
+        created_dt = datetime.fromisoformat(latest["created_at"])
+        delta = datetime.now() - created_dt
+        seconds_ago = max(0.0, delta.total_seconds())
+        is_online = seconds_ago <= 15.0
+    except Exception:
+        pass
+
+    return LevelReadingResponse(
+        id=latest["id"],
+        device_id=latest["device_id"],
+        distance_cm=latest["distance_cm"],
+        level_cm=latest["level_cm"],
+        percentage=latest["percentage"],
+        created_at=latest["created_at"],
+        is_online=is_online,
+        seconds_ago=round(seconds_ago, 1) if seconds_ago is not None else None
+    )
+
+@app.get("/level/history", response_model=List[LevelReadingResponse])
+def get_level_history(device_id: Optional[str] = None, limit: int = 50):
+    """
+    Historial cronológico de lecturas para visualización gráfica en el frontend.
+    """
+    history = db.get_level_history(device_id=device_id, limit=limit)
+    res = []
+    now = datetime.now()
+    for row in history:
+        sec = None
+        try:
+            dt = datetime.fromisoformat(row["created_at"])
+            sec = max(0.0, (now - dt).total_seconds())
+        except Exception:
+            pass
+        res.append(LevelReadingResponse(
+            id=row["id"],
+            device_id=row["device_id"],
+            distance_cm=row["distance_cm"],
+            level_cm=row["level_cm"],
+            percentage=row["percentage"],
+            created_at=row["created_at"],
+            is_online=(sec <= 15.0 if sec is not None else False),
+            seconds_ago=round(sec, 1) if sec is not None else None
+        ))
+    return res
+
+@app.post("/level/simulate", response_model=LevelReadingResponse)
+def simulate_level_reading(reading: LevelReadingCreate):
+    """
+    Permite enviar una lectura simulada desde el frontend para probar la UI sin el ESP32 físico.
+    """
+    return receive_level_reading(reading)
 
 if __name__ == "__main__":
     import uvicorn
