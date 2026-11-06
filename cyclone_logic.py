@@ -189,22 +189,28 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
     rw_pct = float(np.clip((underflow_water / feed_water) * 100.0 if feed_water > 0 else 25.0, 5.0, 60.0))
     rf = rw_pct / 100.0
 
-    # 6. Cálculo de la Curva de Partición Real y Eficiencia Corregida Tromp
+    # 6. Cálculo de la Curva de Partición: Datos Iniciales (Crudos) vs. Datos Balanceados
+    raw_partition = []
     actual_partition = []
 
     for i in range(n):
-        # Usar fracciones reconciliadas balanceadas para consistencia estricta
+        # Partición calculada a partir de los datos iniciales / medidos en laboratorio
+        if f_frac[i] > 1e-6:
+            y_raw = (beta * u_frac[i]) / f_frac[i]
+        else:
+            y_raw = 1.0 if sizes[i] > 200 else (rw_pct / 100.0)
+        raw_partition.append(float(np.clip(y_raw, 0.0, 1.0)))
+
+        # Partición calculada a partir de los datos balanceados / reconciliados (consistencia estricta)
         f_i = reconciled_f_frac[i]
         u_i = reconciled_u_frac[i]
-
         if f_i > 1e-6:
             y_act = (beta * u_i) / f_i
         else:
             y_act = 1.0 if sizes[i] > 200 else (rw_pct / 100.0)
-
         actual_partition.append(float(np.clip(y_act, 0.0, 1.0)))
 
-    # Bypass efectivo de finos Rf: debe ser consistente con la asíntota inferior de la curva
+    # Bypass efectivo de finos Rf: consistente con la asíntota inferior de la curva
     min_fine_recovery = min(actual_partition[-1], (beta * reconciled_u_frac[-1]) / max(1e-6, reconciled_f_frac[-1]))
     rf = float(np.clip(min(rw_pct / 100.0, min_fine_recovery), 0.01, 0.60))
 
@@ -272,6 +278,7 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
             reconciled_feed_passing=rec_f,
             reconciled_overflow_passing=rec_o_passing[i],
             reconciled_underflow_passing=rec_u_passing[i],
+            partition_raw=round(raw_partition[i] * 100.0, 2),
             partition_actual=round(actual_partition[i] * 100.0, 2),
             partition_reduced=round(reduced_partition[i] * 100.0, 2),
             partition_fitted=fitted_partition[i]

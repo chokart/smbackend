@@ -29,9 +29,10 @@ class ReconciledSieveRow(BaseModel):
     reconciled_feed_passing: float
     reconciled_overflow_passing: float
     reconciled_underflow_passing: float
-    partition_actual: float      # Eficiencia real hacia el underflow (%)
-    partition_reduced: float     # Eficiencia corregida hacia el underflow (%)
-    partition_fitted: float      # Curva ajustada por modelo (Lynch-Rao) (%)
+    partition_raw: Optional[float] = None    # Eficiencia calculada con datos iniciales/crudos (%)
+    partition_actual: float                  # Eficiencia calculada con datos balanceados/reconciliados (%)
+    partition_reduced: float                 # Eficiencia corregida/reducida balanceada (%)
+    partition_fitted: float                  # Curva ajustada por modelo (Lynch-Rao) (%)
 
 class CycloneBalanceRequest(BaseModel):
     sieves: List[SieveDataPoint]
