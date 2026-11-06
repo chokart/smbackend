@@ -166,6 +166,9 @@ class CycloneSimulationRequest(BaseModel):
     
     # Modo de cálculo de presión: se puede especificar la presión fija (calcula número óptimo) o predecirla
     fixed_pressure_kpa: Optional[float] = Field(default=None, description="Presión fija de manifold en kPa (opcional)")
+    
+    # Datos balanceados de línea base (Submódulo 1 y 2) para comparación de escenarios
+    baseline: Optional[Dict[str, Any]] = Field(default=None, description="Datos balanceados de línea base para comparación de escenarios")
 
 class CycloneSimulationResponse(BaseModel):
     # Variables operacionales predichas
@@ -191,3 +194,7 @@ class CycloneSimulationResponse(BaseModel):
     
     # Distribuciones granulométricas predichas
     predicted_sieves: List[Dict[str, Any]]
+
+    # Comparativa detallada: Línea Base Balanceada vs. Escenario Simulado
+    comparison_kpis: Optional[List[Dict[str, Any]]] = None
+    comparison_sieves: Optional[List[Dict[str, Any]]] = None

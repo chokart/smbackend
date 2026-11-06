@@ -985,6 +985,104 @@ def simulate_nageswararao(req: CycloneSimulationRequest) -> CycloneSimulationRes
         p50_microns=under_p50
     )
 
+    # 6. Comparativa con Línea Base Balanceada
+    base = req.baseline or {}
+    base_p_kpa = float(base.get("pressure_kpa", 113.8))
+    base_d50c = float(base.get("d50c_microns", 93.8))
+    base_rw = float(base.get("water_recovery_underflow_pct", 12.76))
+    base_feed_tph = float(base.get("feed_solids_tph", 1128.0))
+    base_feed_cp = float(base.get("feed_cp", 42.93))
+    base_under_cp = float(base.get("underflow_cp", 72.20))
+    base_over_cp = float(base.get("overflow_cp", 27.98))
+    base_num_cyc = int(base.get("num_cyclones", 6))
+    base_p80_over = float(base.get("p80_over", 145.0)) if base.get("p80_over") is not None else None
+    base_p80_under = float(base.get("p80_under", 320.0)) if base.get("p80_under") is not None else None
+    base_total_q = float(base.get("total_q_m3h", 1950.0)) if base.get("total_q_m3h") is not None else None
+    base_q_cyc = float(base.get("q_per_cyclone_m3h", 325.0)) if base.get("q_per_cyclone_m3h") is not None else None
+    base_under_cv = float(base.get("underflow_cv_pct", 48.2)) if base.get("underflow_cv_pct") is not None else None
+    base_cl = float(base.get("circulating_load_pct", 186.0)) if base.get("circulating_load_pct") is not None else None
+
+    # Función auxiliar para armar fila KPI
+    def make_kpi_row(param_name: str, unit: str, val_base: Optional[float], val_sim: float):
+        if val_base is None:
+            return {
+                "parameter": param_name,
+                "unit": unit,
+                "baseline": "-",
+                "simulated": round(val_sim, 2),
+                "delta": "-",
+                "delta_pct": "-",
+                "trend": "equal"
+            }
+        diff = val_sim - val_base
+        diff_pct = (diff / max(0.001, abs(val_base))) * 100.0
+        trend = "up" if diff > 0.001 else ("down" if diff < -0.001 else "equal")
+        return {
+            "parameter": param_name,
+            "unit": unit,
+            "baseline": round(val_base, 2),
+            "simulated": round(val_sim, 2),
+            "delta": round(diff, 2),
+            "delta_pct": round(diff_pct, 1),
+            "trend": trend
+        }
+
+    sim_cl = (beta / max(0.001, alpha)) * 100.0
+
+    comparison_kpis = [
+        make_kpi_row("Presión en Manifold", "kPa", base_p_kpa, pred_P_kpa),
+        make_kpi_row("Tamaño de Corte d50c", "µm", base_d50c, pred_d50c_microns),
+        make_kpi_row("P80 Rebose (Overflow)", "µm", base_p80_over, over_p80 if over_p80 else 0.0),
+        make_kpi_row("P80 Descarga (Underflow)", "µm", base_p80_under, under_p80 if under_p80 else 0.0),
+        make_kpi_row("Recuperación de Agua (Rw)", "%", base_rw, pred_rw_pct),
+        make_kpi_row("Caudal Unitario por Ciclón", "m³/h", base_q_cyc, Q_per_cyc),
+        make_kpi_row("Caudal Total de Pulpa", "m³/h", base_total_q, total_q_m3h),
+        make_kpi_row("Flujo de Sólidos Alimentación", "t/h", base_feed_tph, feed_solids),
+        make_kpi_row("% Sólidos Alimentación (Cpf)", "% Cp", base_feed_cp, cp_f),
+        make_kpi_row("% Sólidos Underflow (Cpu)", "% Cp", base_under_cp, calc_cp_u),
+        make_kpi_row("Concentración Vol. Under (Cvu)", "% Cv", base_under_cv, pred_cv_u * 100.0),
+        make_kpi_row("Carga Circulante (CC)", "%", base_cl, sim_cl),
+    ]
+
+    # Comparación Malla a Malla de la Simulación
+    comparison_sieves = []
+    base_sieves = base.get("sieves") or []
+    if base_sieves:
+        base_sieve_map = {}
+        for bs in base_sieves:
+            size_k = int(round(bs.get("size_microns", 0)))
+            base_sieve_map[size_k] = bs
+
+        for i in range(n):
+            s_val = sizes[i]
+            size_k = int(round(s_val))
+            label = ASTM_MESH_MAP.get(size_k, f"{s_val:.0f} µm")
+            bs_match = base_sieve_map.get(size_k)
+            
+            sim_o = o_pass_pred[i]
+            sim_u = u_pass_pred[i]
+            sim_p = round(predicted_sieves[i]["partition_actual"], 2)
+
+            if bs_match:
+                base_o = round(bs_match.get("reconciled_overflow_passing", bs_match.get("overflow_passing", 0.0)), 2)
+                base_u = round(bs_match.get("reconciled_underflow_passing", bs_match.get("underflow_passing", 0.0)), 2)
+                base_p = round(bs_match.get("partition_actual", 0.0), 2)
+                
+                comparison_sieves.append({
+                    "size_microns": s_val,
+                    "mesh_label": label,
+                    "feed_passing": round(f_pass[i], 2),
+                    "baseline_overflow": base_o,
+                    "simulated_overflow": sim_o,
+                    "delta_overflow": round(sim_o - base_o, 2),
+                    "baseline_underflow": base_u,
+                    "simulated_underflow": sim_u,
+                    "delta_underflow": round(sim_u - base_u, 2),
+                    "baseline_partition": base_p,
+                    "simulated_partition": sim_p,
+                    "delta_partition": round(sim_p - base_p, 2)
+                })
+
     return CycloneSimulationResponse(
         predicted_pressure_kpa=round(pred_P_kpa, 1),
         total_slurry_flow_m3h=round(total_q_m3h, 1),
@@ -1001,5 +1099,7 @@ def simulate_nageswararao(req: CycloneSimulationRequest) -> CycloneSimulationRes
         feed=feed_prop,
         overflow=over_prop,
         underflow=under_prop,
-        predicted_sieves=predicted_sieves
+        predicted_sieves=predicted_sieves,
+        comparison_kpis=comparison_kpis,
+        comparison_sieves=comparison_sieves if comparison_sieves else None
     )
