@@ -191,29 +191,30 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
 
     # 6. Cálculo de la Curva de Partición Real y Eficiencia Corregida Tromp
     actual_partition = []
-    reduced_partition = []
 
     for i in range(n):
-        # Fracción retenida en este intervalo
+        # Usar fracciones reconciliadas balanceadas para consistencia estricta
         f_i = reconciled_f_frac[i]
-        u_i = u_frac[i]
+        u_i = reconciled_u_frac[i]
 
         if f_i > 1e-6:
             y_act = (beta * u_i) / f_i
         else:
-            y_act = 1.0 if sizes[i] > 200 else rf
+            y_act = 1.0 if sizes[i] > 200 else (rw_pct / 100.0)
 
-        y_act = float(np.clip(y_act, 0.0, 1.0))
-        
-        # Partición corregida: y' = (y - Rf) / (1 - Rf)
+        actual_partition.append(float(np.clip(y_act, 0.0, 1.0)))
+
+    # Bypass efectivo de finos Rf: debe ser consistente con la asíntota inferior de la curva
+    min_fine_recovery = min(actual_partition[-1], (beta * reconciled_u_frac[-1]) / max(1e-6, reconciled_f_frac[-1]))
+    rf = float(np.clip(min(rw_pct / 100.0, min_fine_recovery), 0.01, 0.60))
+
+    reduced_partition = []
+    for y_act in actual_partition:
         if y_act <= rf:
             y_red = 0.0
         else:
-            y_red = (y_act - rf) / max(0.01, 1.0 - rf)
-        y_red = float(np.clip(y_red, 0.0, 1.0))
-
-        actual_partition.append(y_act)
-        reduced_partition.append(y_red)
+            y_red = (y_act - rf) / max(0.001, 1.0 - rf)
+        reduced_partition.append(float(np.clip(y_red, 0.0, 1.0)))
 
     # 7. Ajuste del Modelo de Lynch-Rao para d50c y parámetro de agudeza m
     # y'_ci = 1 - exp(-0.693 * (x_i / d50c)^m)
