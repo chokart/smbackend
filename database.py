@@ -4,14 +4,24 @@ import os
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
+from contextlib import contextmanager
+
 DB_DIR = os.getenv("DB_DIR", os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(DB_DIR, "diagrams.db")
 
+@contextmanager
 def get_connection():
-    """Obtiene una conexión a la base de datos SQLite con row_factory para diccionarios y timeout extendido."""
+    """Obtiene una conexión a la base de datos SQLite con commit automático y cierre garantizado."""
     conn = sqlite3.connect(DB_PATH, timeout=15.0)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def init_db():
     """Inicializa las tablas de diagramas y lecturas de sensores si no existen."""

@@ -11,6 +11,12 @@ from datetime import datetime
 from pulp_models import PulpCalculationRequest, PulpCalculationResponse
 from pulp_logic import calculate_pulp_properties
 from level_models import LevelReadingCreate, LevelReadingResponse
+from cyclone_models import (
+    CycloneBalanceRequest, CycloneBalanceResponse,
+    CycloneCalibrationRequest, CycloneCalibrationResponse,
+    CycloneSimulationRequest, CycloneSimulationResponse
+)
+from cyclone_logic import solve_cyclone_balance, calibrate_nageswararao, simulate_nageswararao
 import database as db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -258,6 +264,52 @@ def simulate_level_reading(reading: LevelReadingCreate):
     Permite enviar una lectura simulada desde el frontend para probar la UI sin el ESP32 físico.
     """
     return receive_level_reading(reading)
+
+# --- ENDPOINTS MÓDULO DE HIDROCICLONES (NAGESWARARAO & RECONCILIACIÓN) ---
+
+@app.post("/cyclone/balance", response_model=CycloneBalanceResponse)
+def cyclone_balance(request: CycloneBalanceRequest):
+    """
+    Submódulo 1: Reconciliación granulométrica por mínimos cuadrados ponderados (WLS)
+    y determinación de la curva de partición Tromp (d50c, m, split de masa y recuperación de agua).
+    """
+    try:
+        return solve_cyclone_balance(request)
+    except ValueError as e:
+        logger.warning(f"Error de validación en balance de hidrociclón: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Error inesperado en balance de hidrociclón:")
+        raise HTTPException(status_code=500, detail=f"Error en balance de hidrociclón: {e}")
+
+@app.post("/cyclone/calibrate", response_model=CycloneCalibrationResponse)
+def cyclone_calibrate(request: CycloneCalibrationRequest):
+    """
+    Submódulo 2: Calibración y ajuste de parámetros del modelo mecanicista de Nageswararao
+    (KD0, KQ0, KW0, KS0) en base a geometría y datos operacionales.
+    """
+    try:
+        return calibrate_nageswararao(request)
+    except ValueError as e:
+        logger.warning(f"Error de validación en calibración de Nageswararao: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Error en calibración de Nageswararao:")
+        raise HTTPException(status_code=500, detail=f"Error en calibración: {e}")
+
+@app.post("/cyclone/simulate", response_model=CycloneSimulationResponse)
+def cyclone_simulate(request: CycloneSimulationRequest):
+    """
+    Submódulo 3: Simulación predictiva y diagnóstico de acodalamiento (Roping) con modelo de Nageswararao.
+    """
+    try:
+        return simulate_nageswararao(request)
+    except ValueError as e:
+        logger.warning(f"Error en datos de simulación de hidrociclón: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Error en simulación de hidrociclón:")
+        raise HTTPException(status_code=500, detail=f"Error en simulación: {e}")
 
 if __name__ == "__main__":
     import uvicorn
