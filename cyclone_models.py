@@ -115,6 +115,7 @@ class CycloneCalibrationRequest(BaseModel):
     underflow_cp: float = Field(..., description="% sólidos en peso del underflow")
     sharpness_m: float = Field(default=2.4, description="Parámetro de agudeza m")
     feed_fines_pct_minus_38um: Optional[float] = Field(default=25.0, description="% pasante de 38 µm en la alimentación")
+    sieves: Optional[List[Dict[str, Any]]] = Field(default=None, description="Granulometría balanceada del Submódulo 1 para verificación")
 
 class CycloneCalibrationResponse(BaseModel):
     kd0: float = Field(..., description="Constante de corte d50c KD0")
@@ -129,6 +130,10 @@ class CycloneCalibrationResponse(BaseModel):
     q_per_cyclone_m3h: float = Field(..., description="Caudal de pulpa por ciclón individual (m³/h)")
     roping_risk: bool = Field(..., description="Indica si el underflow está en riesgo de acodalamiento")
     roping_message: str
+    
+    # Comparativa detallada: Datos Balanceados vs Modelo Nageswararao
+    comparison_kpis: Optional[List[Dict[str, Any]]] = None
+    modeled_sieves: Optional[List[Dict[str, Any]]] = None
 
 
 # ==============================================================================

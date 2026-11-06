@@ -577,6 +577,149 @@ def calibrate_nageswararao(req: CycloneCalibrationRequest) -> CycloneCalibration
     else:
         roping_msg = f"ÓPTIMO: Operación en régimen abanico (Spray) estable con {round(cv_u*100, 1)}% de sólidos en volumen."
 
+    # 5. Generación de Valores Modelados por Nageswararao para Comparación Directa
+    pred_d50c = kd0 * Dc * term_d * 1e6
+    pred_Q_cyc = kq0 * (Dc ** 2) * math.sqrt(P_kpa / rho_p) * term_q
+    pred_total_q = pred_Q_cyc * num_cyc
+    pred_rw_pct = kw0 * term_w * 100.0
+    pred_cv_u = ks0 * term_s * 100.0
+    pred_cp_u = (pred_cv_u / 100.0 * rho_s) / ((pred_cv_u / 100.0 * rho_s) + ((1.0 - pred_cv_u / 100.0) * rho_l)) * 100.0
+
+    comparison_kpis = [
+        {
+            "parameter": "Tamaño de Corte d50c",
+            "unit": "µm",
+            "balanced": round(req.d50c_microns, 1),
+            "modeled": round(pred_d50c, 1),
+            "delta": round(abs(req.d50c_microns - pred_d50c), 2),
+            "delta_pct": round(abs(req.d50c_microns - pred_d50c) / max(0.01, req.d50c_microns) * 100.0, 2),
+            "status": "exact"
+        },
+        {
+            "parameter": "Caudal Total de Pulpa (Q)",
+            "unit": "m³/h",
+            "balanced": round(total_q, 1),
+            "modeled": round(pred_total_q, 1),
+            "delta": round(abs(total_q - pred_total_q), 2),
+            "delta_pct": round(abs(total_q - pred_total_q) / max(0.01, total_q) * 100.0, 2),
+            "status": "exact"
+        },
+        {
+            "parameter": "Caudal Unitario por Ciclón",
+            "unit": "m³/h",
+            "balanced": round(Q_per_cyc, 1),
+            "modeled": round(pred_Q_cyc, 1),
+            "delta": round(abs(Q_per_cyc - pred_Q_cyc), 2),
+            "delta_pct": round(abs(Q_per_cyc - pred_Q_cyc) / max(0.01, Q_per_cyc) * 100.0, 2),
+            "status": "exact"
+        },
+        {
+            "parameter": "Recuperación de Agua (Rw)",
+            "unit": "%",
+            "balanced": round(req.water_recovery_underflow_pct, 2),
+            "modeled": round(pred_rw_pct, 2),
+            "delta": round(abs(req.water_recovery_underflow_pct - pred_rw_pct), 2),
+            "delta_pct": round(abs(req.water_recovery_underflow_pct - pred_rw_pct) / max(0.01, req.water_recovery_underflow_pct) * 100.0, 2),
+            "status": "exact"
+        },
+        {
+            "parameter": "% Sólidos en Underflow (Cp)",
+            "unit": "%",
+            "balanced": round(req.underflow_cp, 2),
+            "modeled": round(pred_cp_u, 2),
+            "delta": round(abs(req.underflow_cp - pred_cp_u), 2),
+            "delta_pct": round(abs(req.underflow_cp - pred_cp_u) / max(0.01, req.underflow_cp) * 100.0, 2),
+            "status": "exact"
+        },
+        {
+            "parameter": "Concentración Volumétrica Under (Cv)",
+            "unit": "%",
+            "balanced": round(cv_u * 100.0, 2),
+            "modeled": round(pred_cv_u, 2),
+            "delta": round(abs(cv_u * 100.0 - pred_cv_u), 2),
+            "delta_pct": round(abs(cv_u * 100.0 - pred_cv_u) / max(0.01, cv_u * 100.0) * 100.0, 2),
+            "status": "exact"
+        }
+    ]
+
+    # Comparación Malla por Malla si se suministraron los datos granulométricos
+    modeled_sieves_list = []
+    if req.sieves and len(req.sieves) > 0:
+        raw_s = sorted(req.sieves, key=lambda x: x.get("size_microns", 0), reverse=True)
+        m_val = req.sharpness_m or 2.4
+        rf_val = pred_rw_pct / 100.0
+        
+        feed_pass = [s.get("reconciled_feed_passing", s.get("feed_passing", 0.0)) for s in raw_s]
+        n_s = len(raw_s)
+        f_fracs = []
+        for i in range(n_s):
+            prev_f = 100.0 if i == 0 else feed_pass[i - 1]
+            f_fracs.append(max(0.0, (prev_f - feed_pass[i]) / 100.0))
+        f_pan_frac = max(0.0, feed_pass[-1] / 100.0)
+        f_fracs.append(f_pan_frac)
+
+        y_model_arr = []
+        for i in range(n_s):
+            size_um = raw_s[i].get("size_microns", 100.0)
+            y_red = 1.0 - math.exp(-0.693 * ((size_um / max(1.0, pred_d50c)) ** m_val))
+            y_act = rf_val + (1.0 - rf_val) * y_red
+            y_model_arr.append(float(np.clip(y_act, 0.0, 1.0)))
+        y_model_arr.append(rf_val)
+
+        u_mod_fracs = [f_fracs[i] * y_model_arr[i] for i in range(len(f_fracs))]
+        tot_u_mod = sum(u_mod_fracs)
+        o_mod_fracs = [f_fracs[i] * (1.0 - y_model_arr[i]) for i in range(len(f_fracs))]
+
+        if tot_u_mod > 0:
+            norm_u_fracs = [v / tot_u_mod for v in u_mod_fracs]
+        else:
+            norm_u_fracs = u_mod_fracs
+
+        tot_o_mod = sum(o_mod_fracs)
+        if tot_o_mod > 0:
+            norm_o_fracs = [v / tot_o_mod for v in o_mod_fracs]
+        else:
+            norm_o_fracs = o_mod_fracs
+
+        cum_u_mod = 100.0
+        cum_o_mod = 100.0
+        u_mod_passing = []
+        o_mod_passing = []
+        for i in range(n_s):
+            cum_u_mod -= norm_u_fracs[i] * 100.0
+            cum_o_mod -= norm_o_fracs[i] * 100.0
+            u_mod_passing.append(round(float(np.clip(cum_u_mod, 0.0, 100.0)), 2))
+            o_mod_passing.append(round(float(np.clip(cum_o_mod, 0.0, 100.0)), 2))
+
+        for i in range(n_s):
+            s_obj = raw_s[i]
+            size_um = s_obj.get("size_microns", 0)
+            label = ASTM_MESH_MAP.get(int(round(size_um)), f"{size_um:.0f} µm")
+            f_pass_val = round(feed_pass[i], 2)
+            
+            o_bal = s_obj.get("reconciled_overflow_passing", s_obj.get("overflow_passing", 0.0))
+            u_bal = s_obj.get("reconciled_underflow_passing", s_obj.get("underflow_passing", 0.0))
+            p_bal = s_obj.get("partition_actual", 0.0)
+            
+            o_mod = o_mod_passing[i]
+            u_mod = u_mod_passing[i]
+            p_mod = round(y_model_arr[i] * 100.0, 2)
+            
+            modeled_sieves_list.append({
+                "size_microns": size_um,
+                "mesh_label": label,
+                "feed_passing": f_pass_val,
+                "overflow_balanced": round(o_bal, 2),
+                "overflow_modeled": o_mod,
+                "delta_overflow": round(abs(o_bal - o_mod), 2),
+                "underflow_balanced": round(u_bal, 2),
+                "underflow_modeled": u_mod,
+                "delta_underflow": round(abs(u_bal - u_mod), 2),
+                "partition_balanced": round(p_bal, 1),
+                "partition_modeled": p_mod,
+                "delta_partition": round(abs(p_bal - p_mod), 2)
+            })
+
     return CycloneCalibrationResponse(
         kd0=float(kd0),
         kq0=float(kq0),
@@ -588,7 +731,9 @@ def calibrate_nageswararao(req: CycloneCalibrationRequest) -> CycloneCalibration
         underflow_cv_pct=round(cv_u * 100.0, 2),
         q_per_cyclone_m3h=round(Q_per_cyc, 2),
         roping_risk=is_roping,
-        roping_message=roping_msg
+        roping_message=roping_msg,
+        comparison_kpis=comparison_kpis,
+        modeled_sieves=modeled_sieves_list if modeled_sieves_list else None
     )
 
 
