@@ -585,6 +585,14 @@ def calibrate_nageswararao(req: CycloneCalibrationRequest) -> CycloneCalibration
     pred_cv_u = ks0 * term_s * 100.0
     pred_cp_u = (pred_cv_u / 100.0 * rho_s) / ((pred_cv_u / 100.0 * rho_s) + ((1.0 - pred_cv_u / 100.0) * rho_l)) * 100.0
 
+    # Recuperación de Sólidos al Underflow (Rs)
+    term_water_to_solids = ((100.0 - cp_f) / cp_f) * (req.underflow_cp / (100.0 - req.underflow_cp))
+    calc_rs_bal = term_water_to_solids * req.water_recovery_underflow_pct
+    base_rs = req.solids_recovery_underflow_pct if req.solids_recovery_underflow_pct is not None else calc_rs_bal
+
+    pred_term_ws = ((100.0 - cp_f) / cp_f) * (pred_cp_u / (100.0 - pred_cp_u))
+    pred_rs_pct = pred_term_ws * pred_rw_pct
+
     comparison_kpis = [
         {
             "parameter": "Tamaño de Corte d50c",
@@ -593,6 +601,24 @@ def calibrate_nageswararao(req: CycloneCalibrationRequest) -> CycloneCalibration
             "modeled": round(pred_d50c, 1),
             "delta": round(abs(req.d50c_microns - pred_d50c), 2),
             "delta_pct": round(abs(req.d50c_microns - pred_d50c) / max(0.01, req.d50c_microns) * 100.0, 2),
+            "status": "exact"
+        },
+        {
+            "parameter": "Recuperación de Sólidos al Under (Rs)",
+            "unit": "%",
+            "balanced": round(base_rs, 2),
+            "modeled": round(pred_rs_pct, 2),
+            "delta": round(abs(base_rs - pred_rs_pct), 2),
+            "delta_pct": round(abs(base_rs - pred_rs_pct) / max(0.01, base_rs) * 100.0, 2),
+            "status": "exact"
+        },
+        {
+            "parameter": "Recuperación de Agua (Rw)",
+            "unit": "%",
+            "balanced": round(req.water_recovery_underflow_pct, 2),
+            "modeled": round(pred_rw_pct, 2),
+            "delta": round(abs(req.water_recovery_underflow_pct - pred_rw_pct), 2),
+            "delta_pct": round(abs(req.water_recovery_underflow_pct - pred_rw_pct) / max(0.01, req.water_recovery_underflow_pct) * 100.0, 2),
             "status": "exact"
         },
         {
@@ -611,15 +637,6 @@ def calibrate_nageswararao(req: CycloneCalibrationRequest) -> CycloneCalibration
             "modeled": round(pred_Q_cyc, 1),
             "delta": round(abs(Q_per_cyc - pred_Q_cyc), 2),
             "delta_pct": round(abs(Q_per_cyc - pred_Q_cyc) / max(0.01, Q_per_cyc) * 100.0, 2),
-            "status": "exact"
-        },
-        {
-            "parameter": "Recuperación de Agua (Rw)",
-            "unit": "%",
-            "balanced": round(req.water_recovery_underflow_pct, 2),
-            "modeled": round(pred_rw_pct, 2),
-            "delta": round(abs(req.water_recovery_underflow_pct - pred_rw_pct), 2),
-            "delta_pct": round(abs(req.water_recovery_underflow_pct - pred_rw_pct) / max(0.01, req.water_recovery_underflow_pct) * 100.0, 2),
             "status": "exact"
         },
         {
@@ -729,6 +746,7 @@ def calibrate_nageswararao(req: CycloneCalibrationRequest) -> CycloneCalibration
         lambda_param=round(lambda_param, 4),
         feed_cv_pct=round(cv_f * 100.0, 2),
         underflow_cv_pct=round(cv_u * 100.0, 2),
+        solids_recovery_underflow_pct=round(pred_rs_pct, 2),
         q_per_cyclone_m3h=round(Q_per_cyc, 2),
         roping_risk=is_roping,
         roping_message=roping_msg,
@@ -990,6 +1008,7 @@ def simulate_nageswararao(req: CycloneSimulationRequest) -> CycloneSimulationRes
     base_p_kpa = float(base.get("pressure_kpa", 113.8))
     base_d50c = float(base.get("d50c_microns", 93.8))
     base_rw = float(base.get("water_recovery_underflow_pct", 12.76))
+    base_rs = float(base.get("solids_recovery_underflow_pct", base.get("solids_split_underflow_pct", 44.05))) if (base.get("solids_recovery_underflow_pct") is not None or base.get("solids_split_underflow_pct") is not None) else 44.05
     base_feed_tph = float(base.get("feed_solids_tph", 1128.0))
     base_feed_cp = float(base.get("feed_cp", 42.93))
     base_under_cp = float(base.get("underflow_cp", 72.20))
@@ -1034,6 +1053,7 @@ def simulate_nageswararao(req: CycloneSimulationRequest) -> CycloneSimulationRes
         make_kpi_row("Tamaño de Corte d50c", "µm", base_d50c, pred_d50c_microns),
         make_kpi_row("P80 Rebose (Overflow)", "µm", base_p80_over, over_p80 if over_p80 else 0.0),
         make_kpi_row("P80 Descarga (Underflow)", "µm", base_p80_under, under_p80 if under_p80 else 0.0),
+        make_kpi_row("Recuperación de Sólidos al Under (Rs)", "%", base_rs, beta * 100.0),
         make_kpi_row("Recuperación de Agua (Rw)", "%", base_rw, pred_rw_pct),
         make_kpi_row("Caudal Unitario por Ciclón", "m³/h", base_q_cyc, Q_per_cyc),
         make_kpi_row("Caudal Total de Pulpa", "m³/h", base_total_q, total_q_m3h),
@@ -1090,6 +1110,7 @@ def simulate_nageswararao(req: CycloneSimulationRequest) -> CycloneSimulationRes
         d50c_microns=round(pred_d50c_microns, 1),
         water_recovery_underflow_pct=round(pred_rw_pct, 2),
         solids_split_underflow_pct=round(beta * 100.0, 2),
+        solids_recovery_underflow_pct=round(beta * 100.0, 2),
         solids_split_overflow_pct=round(alpha * 100.0, 2),
         underflow_cv_pct=round(pred_cv_u * 100.0, 2),
         underflow_cp_pct=round(calc_cp_u, 2),

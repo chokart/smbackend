@@ -115,6 +115,7 @@ class CycloneCalibrationRequest(BaseModel):
     underflow_cp: float = Field(..., description="% sólidos en peso del underflow")
     sharpness_m: float = Field(default=2.4, description="Parámetro de agudeza m")
     feed_fines_pct_minus_38um: Optional[float] = Field(default=25.0, description="% pasante de 38 µm en la alimentación")
+    solids_recovery_underflow_pct: Optional[float] = Field(default=None, description="Recuperación de sólidos al underflow Rs (%)")
     sieves: Optional[List[Dict[str, Any]]] = Field(default=None, description="Granulometría balanceada del Submódulo 1 para verificación")
 
 class CycloneCalibrationResponse(BaseModel):
@@ -127,6 +128,7 @@ class CycloneCalibrationResponse(BaseModel):
     lambda_param: float = Field(..., description="Parámetro reológico / corrección de finos lambda")
     feed_cv_pct: float = Field(..., description="Concentración volumétrica de sólidos alimentación (%)")
     underflow_cv_pct: float = Field(..., description="Concentración volumétrica de sólidos underflow (%)")
+    solids_recovery_underflow_pct: Optional[float] = Field(default=None, description="Recuperación de sólidos al underflow modelada Rs (%)")
     q_per_cyclone_m3h: float = Field(..., description="Caudal de pulpa por ciclón individual (m³/h)")
     roping_risk: bool = Field(..., description="Indica si el underflow está en riesgo de acodalamiento")
     roping_message: str
@@ -178,6 +180,7 @@ class CycloneSimulationResponse(BaseModel):
     d50c_microns: float
     water_recovery_underflow_pct: float
     solids_split_underflow_pct: float
+    solids_recovery_underflow_pct: Optional[float] = Field(default=None, description="Recuperación de sólidos al underflow Rs (%)")
     solids_split_overflow_pct: float
     underflow_cv_pct: float
     underflow_cp_pct: float
