@@ -111,20 +111,57 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
     beta = float(np.clip(beta, 0.05, 0.95))
     alpha = 1.0 - beta
 
-    # 4. Cálculo de fracciones compuestas reconciliadas
-    reconciled_f_frac = [alpha * o_frac[i] + beta * u_frac[i] for i in range(len(f_frac))]
+    # 4. Reconciliación analítica simultánea por mínimos cuadrados para las 3 corrientes
+    reconciled_f_frac = []
+    reconciled_o_frac = []
+    reconciled_u_frac = []
 
-    # Normalizar para asegurar suma = 1.0
+    for i in range(len(f_frac)):
+        fi = f_frac[i]
+        oi = o_frac[i]
+        ui = u_frac[i]
+
+        # Varianza de medición estimada (1% base + 5% del valor relativo)
+        v_f = (0.01 + 0.05 * fi) ** 2
+        v_o = (0.01 + 0.05 * oi) ** 2
+        v_u = (0.01 + 0.05 * ui) ** 2
+
+        # Residuo de balance de masa: r = f - (alpha * o + beta * u)
+        r = fi - (alpha * oi + beta * ui)
+        # Varianza del residuo: Var(r) = V_f + alpha^2 * V_o + beta^2 * V_u
+        v_r = v_f + (alpha ** 2) * v_o + (beta ** 2) * v_u
+
+        if v_r > 1e-12:
+            adj_f = fi - (v_f / v_r) * r
+            adj_o = oi + (alpha * v_o / v_r) * r
+            adj_u = ui + (beta * v_u / v_r) * r
+        else:
+            adj_f = alpha * oi + beta * ui
+            adj_o = oi
+            adj_u = ui
+
+        reconciled_f_frac.append(max(0.0, adj_f))
+        reconciled_o_frac.append(max(0.0, adj_o))
+        reconciled_u_frac.append(max(0.0, adj_u))
+
+    # Normalizar cada corriente para que la suma de fracciones sea exactamente 1.0
     sum_f = sum(reconciled_f_frac)
-    if sum_f > 0:
-        reconciled_f_frac = [val / sum_f for val in reconciled_f_frac]
+    sum_o = sum(reconciled_o_frac)
+    sum_u = sum(reconciled_u_frac)
+    if sum_f > 0: reconciled_f_frac = [v / sum_f for v in reconciled_f_frac]
+    if sum_o > 0: reconciled_o_frac = [v / sum_o for v in reconciled_o_frac]
+    if sum_u > 0: reconciled_u_frac = [v / sum_u for v in reconciled_u_frac]
 
-    # Reconstruir pasantes acumulados reconciliados
-    rec_f_passing = []
-    cum_f = 100.0
+    # Reconstruir pasantes acumulados reconciliados para Alimentación, Rebose y Descarga
+    rec_f_passing, rec_o_passing, rec_u_passing = [], [], []
+    cum_f, cum_o, cum_u = 100.0, 100.0, 100.0
     for i in range(n):
         cum_f -= reconciled_f_frac[i] * 100.0
+        cum_o -= reconciled_o_frac[i] * 100.0
+        cum_u -= reconciled_u_frac[i] * 100.0
         rec_f_passing.append(round(float(np.clip(cum_f, 0.0, 100.0)), 2))
+        rec_o_passing.append(round(float(np.clip(cum_o, 0.0, 100.0)), 2))
+        rec_u_passing.append(round(float(np.clip(cum_u, 0.0, 100.0)), 2))
 
     # 5. Balances de Masa de Sólidos, Agua y Pulpa
     feed_solids = req.feed_solids_tph or 500.0
@@ -232,8 +269,8 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
             overflow_passing=s_obj.overflow_passing,
             underflow_passing=s_obj.underflow_passing,
             reconciled_feed_passing=rec_f,
-            reconciled_overflow_passing=s_obj.overflow_passing,
-            reconciled_underflow_passing=s_obj.underflow_passing,
+            reconciled_overflow_passing=rec_o_passing[i],
+            reconciled_underflow_passing=rec_u_passing[i],
             partition_actual=round(actual_partition[i] * 100.0, 2),
             partition_reduced=round(reduced_partition[i] * 100.0, 2),
             partition_fitted=fitted_partition[i]
@@ -246,12 +283,12 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
     underflow_pulp = underflow_solids + underflow_water
     
     feed_p80 = calculate_percentile(sizes, rec_f_passing, 80.0)
-    over_p80 = calculate_percentile(sizes, o_pass, 80.0)
-    under_p80 = calculate_percentile(sizes, u_pass, 80.0)
+    over_p80 = calculate_percentile(sizes, rec_o_passing, 80.0)
+    under_p80 = calculate_percentile(sizes, rec_u_passing, 80.0)
 
     feed_p50 = calculate_percentile(sizes, rec_f_passing, 50.0)
-    over_p50 = calculate_percentile(sizes, o_pass, 50.0)
-    under_p50 = calculate_percentile(sizes, u_pass, 50.0)
+    over_p50 = calculate_percentile(sizes, rec_o_passing, 50.0)
+    under_p50 = calculate_percentile(sizes, rec_u_passing, 50.0)
 
     # Densidades de pulpa
     feed_rho_p = 100.0 / ((cp_f / rho_s) + ((100.0 - cp_f) / rho_l))
