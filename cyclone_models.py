@@ -90,16 +90,16 @@ class CycloneBalanceResponse(BaseModel):
 # ==============================================================================
 
 class CycloneGeometry(BaseModel):
-    dc_mm: float = Field(default=500.0, description="Diámetro interno del hidrociclón Dc (mm)")
-    di_mm: float = Field(default=125.0, description="Diámetro equivalente de entrada Di (mm)")
-    do_mm: float = Field(default=175.0, description="Diámetro del vortex finder Do (mm)")
-    du_mm: float = Field(default=100.0, description="Diámetro del apex / tobera Du (mm)")
-    lc_mm: float = Field(default=1200.0, description="Longitud de sección cilíndrica Lc (mm)")
-    theta_deg: float = Field(default=20.0, description="Ángulo del cono en grados (°)")
+    dc_mm: float = Field(default=508.0, description="Diámetro interno del hidrociclón Dc (mm) - Krebs GMAX20 (20 pulg)")
+    di_mm: float = Field(default=140.0, description="Diámetro equivalente de entrada Di (mm) - Entrada Victaulic 8 pulg")
+    do_mm: float = Field(default=171.5, description="Diámetro del vortex finder Do (mm) - Inserto 6.75 pulg")
+    du_mm: float = Field(default=101.6, description="Diámetro del apex / tobera Du (mm) - Inserto 4.0 pulg")
+    lc_mm: float = Field(default=1086.0, description="Longitud de sección cilíndrica Lc (mm) - Plano 42 3/4 pulg")
+    theta_deg: float = Field(default=22.5, description="Ángulo total del cono en grados (°) - Plano 2 x 11.25°")
 
 class CycloneCalibrationRequest(BaseModel):
     geometry: CycloneGeometry
-    num_cyclones_operating: int = Field(default=4, description="Número de ciclones operando en batería")
+    num_cyclones_operating: int = Field(default=6, description="Número de ciclones operando en batería (Tag 2102-CY-001/006)")
     
     # Datos de operación conocidos / medidos
     pressure_kpa: float = Field(..., description="Presión de alimentación en manifold (kPa)")
@@ -141,7 +141,7 @@ class FeedPsdItem(BaseModel):
 
 class CycloneSimulationRequest(BaseModel):
     geometry: CycloneGeometry
-    num_cyclones_operating: int = Field(default=4, description="Número de ciclones operando en batería")
+    num_cyclones_operating: int = Field(default=6, description="Número de ciclones operando en batería")
     
     # Parámetros calibrados de Nageswararao (del Submódulo 2)
     kd0: float = Field(default=0.00045, description="Constante de corte KD0")
