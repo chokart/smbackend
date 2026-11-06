@@ -5,9 +5,29 @@ from scipy.optimize import curve_fit
 
 from cyclone_models import (
     CycloneBalanceRequest, CycloneBalanceResponse, ReconciledSieveRow, StreamProperties,
+    SieveResidualInfo,
     CycloneGeometry, CycloneCalibrationRequest, CycloneCalibrationResponse,
     CycloneSimulationRequest, CycloneSimulationResponse
 )
+
+ASTM_MESH_MAP = {
+    1680: "#12",
+    1190: "#16",
+    841: "#20",
+    595: "#30",
+    420: "#40",
+    297: "#48",
+    250: "#60",
+    210: "#65",
+    177: "#80",
+    149: "#100",
+    125: "#115",
+    105: "#150",
+    74: "#200",
+    53: "#270",
+    44: "#325",
+    37: "#400",
+}
 
 # ==============================================================================
 # UTILIDADES MATEMÁTICAS Y DE DISTRIBUCIÓN GRANULOMÉTRICA
@@ -263,25 +283,70 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
         y_fit_actual = rf + (1.0 - rf) * y_fit
         fitted_partition.append(round(float(y_fit_actual * 100.0), 2))
 
+    # Cálculo de errores y desbalances por malla
+    raw_discrepancies = []
+    for i in range(n):
+        s_obj = raw_sieves[i]
+        comp_val = alpha * s_obj.overflow_passing + beta * s_obj.underflow_passing
+        res_val = abs(s_obj.feed_passing - comp_val)
+        raw_discrepancies.append((i, res_val, comp_val))
+
+    # Ordenar por desbalance descendente para asignar el ranking (1 = mayor error)
+    ranked_order = sorted(raw_discrepancies, key=lambda x: x[1], reverse=True)
+    rank_map = {}
+    for rank_idx, (orig_i, res_val, comp_val) in enumerate(ranked_order, start=1):
+        sev = 'high' if res_val >= 0.50 else ('medium' if res_val >= 0.20 else 'low')
+        rank_map[orig_i] = (rank_idx, sev, round(res_val, 2), round(comp_val, 2))
+
     # Construir filas reconciliadas
     reconciled_rows = []
     residuals = []
+    top_errors_list = []
+
     for i in range(n):
         s_obj = raw_sieves[i]
         rec_f = rec_f_passing[i]
         residuals.append((s_obj.feed_passing - rec_f) ** 2)
+        
+        r_rank, r_sev, r_res, r_comp = rank_map[i]
+        d_feed = round(abs(s_obj.feed_passing - rec_f), 2)
+        mesh_label = ASTM_MESH_MAP.get(int(round(s_obj.size_microns)), f"{s_obj.size_microns:.0f} µm")
+
         reconciled_rows.append(ReconciledSieveRow(
             size_microns=s_obj.size_microns,
+            mesh_label=mesh_label,
             feed_passing=s_obj.feed_passing,
             overflow_passing=s_obj.overflow_passing,
             underflow_passing=s_obj.underflow_passing,
             reconciled_feed_passing=rec_f,
             reconciled_overflow_passing=rec_o_passing[i],
             reconciled_underflow_passing=rec_u_passing[i],
+            composite_passing=r_comp,
+            residual_pct=r_res,
+            delta_feed=d_feed,
+            rank=r_rank,
+            severity=r_sev,
             partition_raw=round(raw_partition[i] * 100.0, 2),
             partition_actual=round(actual_partition[i] * 100.0, 2),
             partition_reduced=round(reduced_partition[i] * 100.0, 2),
             partition_fitted=fitted_partition[i]
+        ))
+
+    # Construir lista top_errors ordenada de mayor a menor discrepancia
+    for orig_i, res_val, comp_val in ranked_order:
+        s_obj = raw_sieves[orig_i]
+        rec_f = rec_f_passing[orig_i]
+        r_rank, r_sev, r_res, r_comp = rank_map[orig_i]
+        mesh_label = ASTM_MESH_MAP.get(int(round(s_obj.size_microns)), f"{s_obj.size_microns:.0f} µm")
+        top_errors_list.append(SieveResidualInfo(
+            size_microns=s_obj.size_microns,
+            mesh_label=mesh_label,
+            feed_measured=s_obj.feed_passing,
+            composite_measured=r_comp,
+            residual_pct=r_res,
+            delta_feed_pct=round(abs(s_obj.feed_passing - rec_f), 2),
+            rank=r_rank,
+            severity=r_sev
         ))
 
     mse = float(np.mean(residuals)) if residuals else 0.0
@@ -353,6 +418,7 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
         overflow=over_prop,
         underflow=under_prop,
         reconciled_sieves=reconciled_rows,
+        top_errors=top_errors_list,
         mean_squared_error=round(mse, 4)
     )
 

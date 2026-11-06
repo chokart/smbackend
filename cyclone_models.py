@@ -21,14 +21,30 @@ class StreamProperties(BaseModel):
     p80_microns: Optional[float] = None
     p50_microns: Optional[float] = None
 
+class SieveResidualInfo(BaseModel):
+    size_microns: float
+    mesh_label: Optional[str] = None
+    feed_measured: float
+    composite_measured: float
+    residual_pct: float            # |f_i - (alpha*o_i + beta*u_i)| en % pasante
+    delta_feed_pct: float          # |feed_real - feed_bal|
+    rank: int
+    severity: str                  # 'high' (>= 0.5%), 'medium' (0.2% - 0.5%), 'low' (< 0.2%)
+
 class ReconciledSieveRow(BaseModel):
     size_microns: float
+    mesh_label: Optional[str] = None
     feed_passing: float
     overflow_passing: float
     underflow_passing: float
     reconciled_feed_passing: float
     reconciled_overflow_passing: float
     reconciled_underflow_passing: float
+    composite_passing: Optional[float] = None
+    residual_pct: Optional[float] = None     # Desbalance bruto inicial (%)
+    delta_feed: Optional[float] = None       # Ajuste reconciliado al Feed (%)
+    rank: Optional[int] = None               # Ranking de desbalance (1 = mayor)
+    severity: Optional[str] = None           # 'high' | 'medium' | 'low'
     partition_raw: Optional[float] = None    # Eficiencia calculada con datos iniciales/crudos (%)
     partition_actual: float                  # Eficiencia calculada con datos balanceados/reconciliados (%)
     partition_reduced: float                 # Eficiencia corregida/reducida balanceada (%)
@@ -57,6 +73,7 @@ class CycloneBalanceResponse(BaseModel):
     underflow: StreamProperties
     
     reconciled_sieves: List[ReconciledSieveRow]
+    top_errors: Optional[List[SieveResidualInfo]] = None
     mean_squared_error: float
 
 
