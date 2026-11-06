@@ -28,6 +28,11 @@ class SieveResidualInfo(BaseModel):
     composite_measured: float
     residual_pct: float            # |f_i - (alpha*o_i + beta*u_i)| en % pasante
     delta_feed_pct: float          # |feed_real - feed_bal|
+    delta_over_pct: float          # |over_real - over_bal|
+    delta_under_pct: float         # |under_real - under_bal|
+    total_delta_pct: float         # suma de correcciones |Δf| + |Δo| + |Δu|
+    worst_stream: str              # 'Alimentación' | 'Rebose' | 'Descarga'
+    worst_delta_pct: float         # Mayor corrección individual entre las 3 corrientes
     rank: int
     severity: str                  # 'high' (>= 0.5%), 'medium' (0.2% - 0.5%), 'low' (< 0.2%)
 
@@ -43,6 +48,9 @@ class ReconciledSieveRow(BaseModel):
     composite_passing: Optional[float] = None
     residual_pct: Optional[float] = None     # Desbalance bruto inicial (%)
     delta_feed: Optional[float] = None       # Ajuste reconciliado al Feed (%)
+    delta_over: Optional[float] = None       # Ajuste reconciliado al Rebose (%)
+    delta_under: Optional[float] = None      # Ajuste reconciliado a la Descarga (%)
+    worst_stream: Optional[str] = None       # Corriente con mayor ajuste
     rank: Optional[int] = None               # Ranking de desbalance (1 = mayor)
     severity: Optional[str] = None           # 'high' | 'medium' | 'low'
     partition_raw: Optional[float] = None    # Eficiencia calculada con datos iniciales/crudos (%)

@@ -306,10 +306,19 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
     for i in range(n):
         s_obj = raw_sieves[i]
         rec_f = rec_f_passing[i]
+        rec_o = rec_o_passing[i]
+        rec_u = rec_u_passing[i]
+
         residuals.append((s_obj.feed_passing - rec_f) ** 2)
         
         r_rank, r_sev, r_res, r_comp = rank_map[i]
         d_feed = round(abs(s_obj.feed_passing - rec_f), 2)
+        d_over = round(abs(s_obj.overflow_passing - rec_o), 2)
+        d_under = round(abs(s_obj.underflow_passing - rec_u), 2)
+        
+        deltas = [("Alimentación", d_feed), ("Rebose", d_over), ("Descarga", d_under)]
+        worst_str, worst_v = max(deltas, key=lambda x: x[1])
+
         mesh_label = ASTM_MESH_MAP.get(int(round(s_obj.size_microns)), f"{s_obj.size_microns:.0f} µm")
 
         reconciled_rows.append(ReconciledSieveRow(
@@ -319,11 +328,14 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
             overflow_passing=s_obj.overflow_passing,
             underflow_passing=s_obj.underflow_passing,
             reconciled_feed_passing=rec_f,
-            reconciled_overflow_passing=rec_o_passing[i],
-            reconciled_underflow_passing=rec_u_passing[i],
+            reconciled_overflow_passing=rec_o,
+            reconciled_underflow_passing=rec_u,
             composite_passing=r_comp,
             residual_pct=r_res,
             delta_feed=d_feed,
+            delta_over=d_over,
+            delta_under=d_under,
+            worst_stream=worst_str,
             rank=r_rank,
             severity=r_sev,
             partition_raw=round(raw_partition[i] * 100.0, 2),
@@ -336,15 +348,32 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
     for orig_i, res_val, comp_val in ranked_order:
         s_obj = raw_sieves[orig_i]
         rec_f = rec_f_passing[orig_i]
+        rec_o = rec_o_passing[orig_i]
+        rec_u = rec_u_passing[orig_i]
+
+        d_feed = round(abs(s_obj.feed_passing - rec_f), 2)
+        d_over = round(abs(s_obj.overflow_passing - rec_o), 2)
+        d_under = round(abs(s_obj.underflow_passing - rec_u), 2)
+        tot_d = round(d_feed + d_over + d_under, 2)
+
+        deltas = [("Alimentación", d_feed), ("Rebose", d_over), ("Descarga", d_under)]
+        worst_str, worst_v = max(deltas, key=lambda x: x[1])
+
         r_rank, r_sev, r_res, r_comp = rank_map[orig_i]
         mesh_label = ASTM_MESH_MAP.get(int(round(s_obj.size_microns)), f"{s_obj.size_microns:.0f} µm")
+
         top_errors_list.append(SieveResidualInfo(
             size_microns=s_obj.size_microns,
             mesh_label=mesh_label,
             feed_measured=s_obj.feed_passing,
             composite_measured=r_comp,
             residual_pct=r_res,
-            delta_feed_pct=round(abs(s_obj.feed_passing - rec_f), 2),
+            delta_feed_pct=d_feed,
+            delta_over_pct=d_over,
+            delta_under_pct=d_under,
+            total_delta_pct=tot_d,
+            worst_stream=worst_str,
+            worst_delta_pct=worst_v,
             rank=r_rank,
             severity=r_sev
         ))
