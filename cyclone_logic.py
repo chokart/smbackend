@@ -164,24 +164,25 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
         reconciled_o_frac.append(max(0.0, adj_o))
         reconciled_u_frac.append(max(0.0, adj_u))
 
-    # Normalizar cada corriente para que la suma de fracciones sea exactamente 1.0
-    sum_f = sum(reconciled_f_frac)
+    # Normalizar Over y Under para que sumen exactamente 1.0, y Feed compuesto estrictamente (Feed = alpha*Over + beta*Under)
     sum_o = sum(reconciled_o_frac)
     sum_u = sum(reconciled_u_frac)
-    if sum_f > 0: reconciled_f_frac = [v / sum_f for v in reconciled_f_frac]
     if sum_o > 0: reconciled_o_frac = [v / sum_o for v in reconciled_o_frac]
     if sum_u > 0: reconciled_u_frac = [v / sum_u for v in reconciled_u_frac]
+    reconciled_f_frac = [alpha * oi + beta * ui for oi, ui in zip(reconciled_o_frac, reconciled_u_frac)]
 
     # Reconstruir pasantes acumulados reconciliados para Alimentación, Rebose y Descarga
     rec_f_passing, rec_o_passing, rec_u_passing = [], [], []
-    cum_f, cum_o, cum_u = 100.0, 100.0, 100.0
+    cum_o, cum_u = 100.0, 100.0
     for i in range(n):
-        cum_f -= reconciled_f_frac[i] * 100.0
         cum_o -= reconciled_o_frac[i] * 100.0
         cum_u -= reconciled_u_frac[i] * 100.0
-        rec_f_passing.append(round(float(np.clip(cum_f, 0.0, 100.0)), 2))
-        rec_o_passing.append(round(float(np.clip(cum_o, 0.0, 100.0)), 2))
-        rec_u_passing.append(round(float(np.clip(cum_u, 0.0, 100.0)), 2))
+        val_o = round(float(np.clip(cum_o, 0.0, 100.0)), 2)
+        val_u = round(float(np.clip(cum_u, 0.0, 100.0)), 2)
+        val_f = round(float(np.clip(alpha * val_o + beta * val_u, 0.0, 100.0)), 2)
+        rec_o_passing.append(val_o)
+        rec_u_passing.append(val_u)
+        rec_f_passing.append(val_f)
 
     # 5. Balances de Masa de Sólidos, Agua y Pulpa
     feed_solids = req.feed_solids_tph or 500.0
@@ -230,9 +231,8 @@ def solve_cyclone_balance(req: CycloneBalanceRequest) -> CycloneBalanceResponse:
             y_act = 1.0 if sizes[i] > 200 else (rw_pct / 100.0)
         actual_partition.append(float(np.clip(y_act, 0.0, 1.0)))
 
-    # Bypass efectivo de finos Rf: consistente con la asíntota inferior de la curva
-    min_fine_recovery = min(actual_partition[-1], (beta * reconciled_u_frac[-1]) / max(1e-6, reconciled_f_frac[-1]))
-    rf = float(np.clip(min(rw_pct / 100.0, min_fine_recovery), 0.01, 0.60))
+    # Bypass de finos Rf: teóricamente igual a la recuperación de agua al underflow (Rw)
+    rf = float(np.clip(rw_pct / 100.0, 0.02, 0.60))
 
     reduced_partition = []
     for y_act in actual_partition:
