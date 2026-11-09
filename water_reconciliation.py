@@ -291,6 +291,14 @@ def _build_response(request: WaterReconciliationRequest, y_hat: np.ndarray, std_
             w_err = float(np.sqrt((s_err * (100.0 / cp_val - 1.0)) ** 2 + (s_val * 100.0 / (cp_val ** 2) * cp_err) ** 2)) if cp_val > 0 else 0.0
             q_err = float(np.sqrt((100.0 / cp_val * s_err) ** 2 + (100.0 * s_val / (cp_val ** 2) * cp_err) ** 2)) if cp_val > 0 else 0.0
 
+        ge = float(getattr(flow.data, 'gravedad_especifica', 2.7) or 2.7)
+        if flow.data.is_water_only or cp_val <= 0:
+            rho_p = 1.0
+            q_m3h = w_val
+        else:
+            rho_p = 100.0 / ((cp_val / ge) + ((100.0 - cp_val) / 1.0))
+            q_m3h = (s_val / ge) + w_val
+
         reconciled_flows.append({
             "id": flow.id,
             "corrected_data": {
@@ -301,6 +309,9 @@ def _build_response(request: WaterReconciliationRequest, y_hat: np.ndarray, std_
                 "tonelaje_pulpa_calculado": q_calc,
                 "tonelaje_agua_calculado": w_val,
                 "tonelaje_agua_error": w_err,
+                "gravedad_especifica": ge,
+                "densidad_pulpa": round(rho_p, 3),
+                "caudal_pulpa_m3h": round(q_m3h, 2),
                 # Compatibilidad hacia atrás:
                 "tonelaje_solido_calculado": s_val,
                 "tonelaje_pulpa_corregido": q_calc,

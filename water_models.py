@@ -34,6 +34,7 @@ class WaterFlowData(BaseModel):
     porcentaje_solidos_error: float = 0.5
     porcentaje_solidos_fixed: bool = False
     porcentaje_solidos_not_measured: bool = False
+    gravedad_especifica: float = 2.7  # Gravedad específica de sólidos (t/m³)
 
     def get_solid_tonnage(self) -> float:
         if self.is_water_only:
