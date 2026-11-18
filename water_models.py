@@ -9,6 +9,7 @@ class NodeType(str, Enum):
     RELAVE = "tailing"
     PRODUCTO = "product"
     AGUA = "water_source" # Opcional: para fuentes de agua pura
+    SALIDA_AGUA = "water_sink" # Salida / recuperación de agua pura
 
 class WaterFlowData(BaseModel):
     # En balance de agua, ahora ingresamos el Flujo Másico de Sólido Seco (tph)
